@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.4.0 — October 23, 2026
+
+**A bigger base model.**
+
+- `HUMANIZE_ADAPTER` points the base-model pipeline at a HIP adapter in GGUF other than the
+  4B one, for a bigger base model set in `HUMANIZE_BASE_MODEL` (Qwen3-8B-Base, 14B-Base,
+  Llama-3-8B). The authors' adapters are on Hugging Face; the README gives the
+  `convert_lora_to_gguf.py` steps and the memory each size needs.
+- `install_model.py` checks the adapter is a LoRA in GGUF, that the base model has its
+  architecture, and, as before, that it is a base model and not the chat one (Qwen3 or
+  «instruct»/«chat» in the name). Nothing is downloaded when both are yours.
+- Not measured: every result in this repo is Qwen3-4B-Base.
+
 ## 4.3.2 — October 23, 2026
 
 - `HUMANIZE_GPU_DEVICE=Vulkan1` pins the GPU run to one device of `llama-completion

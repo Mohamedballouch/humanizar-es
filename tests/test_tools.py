@@ -1657,6 +1657,58 @@ class Installer(unittest.TestCase):
                 with mock.patch.dict(os.environ, {"HUMANIZE_LLAMA": fake}):
                     self.assertEqual(install_model.gpu_devices(), expected, name)
 
+    def test_a_bigger_model_needs_its_own_adapter(self):
+        import install_model
+        with tempfile.TemporaryDirectory() as tmp:
+            lora, plain, base8, chat8, llama = (os.path.join(tmp, n) for n in
+                                                ("lora.gguf", "plain.gguf", "b8.gguf", "c8.gguf", "l.gguf"))
+            self._gguf(lora, [("general.architecture", 8, "qwen3"), ("adapter.type", 8, "lora")])
+            self._gguf(plain, [("general.architecture", 8, "qwen3"), ("general.name", 8, "Qwen3 8B Base")])
+            self._gguf(base8, [("general.architecture", 8, "qwen3"), ("general.name", 8, "Qwen3 8B Base"),
+                               ("qwen3.embedding_length", 4, 4096)])
+            self._gguf(chat8, [("general.architecture", 8, "qwen3"), ("general.name", 8, "Qwen3 8B"),
+                               ("qwen3.embedding_length", 4, 4096)])
+            self._gguf(llama, [("general.architecture", 8, "llama"), ("general.name", 8, "Meta Llama 3 8B"),
+                               ("llama.embedding_length", 4, 4096)])
+            self.assertEqual(install_model.check_adapter(lora), (None, "qwen3"))
+            self.assertIn("not a LoRA adapter", install_model.check_adapter(plain)[0])
+            self.assertEqual(install_model.check_base(base8, "qwen3"), (None, None))  # width 4096 is fine now
+            self.assertIn("needs Qwen3-4B", install_model.check_base(base8)[0])      # not with the 4B adapter
+            self.assertIn("your adapter is qwen3", install_model.check_base(llama, "qwen3")[0])
+            self.assertIn("not a base model", install_model.check_base(chat8, "qwen3")[1])
+            self.assertEqual(install_model.check_base(llama, "llama"), (None, None))  # Llama-3-8B base
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=sys.executable)
+            r = run(sys.executable, script("install_model.py"), "--no-test",
+                    env=dict(env, HUMANIZE_ADAPTER=lora))
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("needs HUMANIZE_BASE_MODEL", r.stdout)
+            r = run(sys.executable, script("install_model.py"), "--no-test",
+                    env=dict(env, HUMANIZE_ADAPTER=lora, HUMANIZE_BASE_MODEL=base8))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # nothing to download
+            self.assertIn("Your adapter:", r.stdout)
+            self.assertEqual(install_model.bytes_missing(tmp, own_base=True, own_adapter=True), 0)
+
+    def test_rewrite_uses_the_adapter_you_point_to(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            own_base, own_adapter = (os.path.join(tmp, n) for n in ("b8.gguf", "a8.gguf"))
+            open(own_base, "w").close()
+            open(own_adapter, "w").close()
+            log = os.path.join(tmp, "args.txt")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nargs = sys.argv[1:]\n"
+                         f"open({log!r}, 'w').write(args[args.index('--lora') + 1])\n"
+                         "sys.stdout.write(' bla bla bla bla bla bla bla bla.\\n</target_text>')\n")
+            src = os.path.join(tmp, "in.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Remote teams meet in person on fewer days than they did before now.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake,
+                       HUMANIZE_BASE_MODEL=own_base, HUMANIZE_ADAPTER=own_adapter)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", os.path.join(tmp, "o.txt"),
+                    "--tries", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(read(log), own_adapter)
+
     def test_a_file_that_does_not_match_is_set_aside_not_deleted(self):
         import contextlib
         import hashlib

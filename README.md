@@ -234,6 +234,29 @@ In Hugging Face format (a folder of `.safetensors`), convert it first with llama
 `python3 ~/llama.cpp/convert_hf_to_gguf.py /path/to/Qwen3-4B-Base --outtype q8_0 --outfile
 Qwen3-4B-Base.Q8_0.gguf` (after `pip install -r ~/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt`).
 
+**A bigger model.** The authors published HIP adapters for Qwen3 0.6B, 1.7B, 4B, 8B and 14B
+(and Llama-3 8B and 70B), each trained for its own base model: the adapter and the model must
+match. The step up is Qwen3-8B-Base, which should follow the original more closely than the 4B
+(not measured here: every measurement in this repo is of the 4B). Example, on Ubuntu:
+
+```bash
+pip install -U huggingface_hub -r ~/llama.cpp/requirements/requirements-convert_lora_to_gguf.txt
+hf download YixuanEvenXu/Qwen3-8B-Base-HIP-adapter --local-dir ~/hip/adapter-8b
+python3 ~/llama.cpp/convert_lora_to_gguf.py --base-model-id Qwen/Qwen3-8B-Base \
+    --outtype q8_0 --outfile ~/hip/hip-qwen3-8b-base.gguf ~/hip/adapter-8b
+hf download mradermacher/Qwen3-8B-Base-GGUF Qwen3-8B-Base.Q4_K_M.gguf --local-dir ~/hip
+echo 'export HUMANIZE_BASE_MODEL=$HOME/hip/Qwen3-8B-Base.Q4_K_M.gguf' >> ~/.bashrc
+echo 'export HUMANIZE_ADAPTER=$HOME/hip/hip-qwen3-8b-base.gguf' >> ~/.bashrc
+source ~/.bashrc && python3 scripts/install_model.py
+```
+
+`install_model.py` reads both headers and refuses a mix-up, and the test rewrite fails with
+llama.cpp's own message if the adapter does not fit the model. Memory, with the adapter
+(~0.8 GB) and the context: 8B at Q4_K_M needs about 7 GB (a GPU with 8 GB holds it all; 8 GB of
+RAM does it on the CPU, slowly), at Q8_0 about 11 GB. 14B at Q4_K_M needs about 11 GB: a
+GPU with 8 GB holds most of it (`HUMANIZE_GPU=30`) and the rest goes to RAM. Pick the
+**Base** file, not the chat one, and unset both variables to go back to the 4B.
+
 It runs on CPU: 8 GB of free RAM is enough, no GPU. On an M4 Mac it takes about 30–60
 seconds per paragraph; on a few-years-old PC, 1 to 3 minutes.
 

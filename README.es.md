@@ -234,6 +234,31 @@ En formato de Hugging Face (una carpeta de `.safetensors`), conviértelo antes c
 `python3 ~/llama.cpp/convert_hf_to_gguf.py /ruta/a/Qwen3-4B-Base --outtype q8_0 --outfile
 Qwen3-4B-Base.Q8_0.gguf` (tras `pip install -r ~/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt`).
 
+**Un modelo más grande.** Los autores publicaron adaptadores HIP para Qwen3 0.6B, 1.7B, 4B,
+8B y 14B (y Llama-3 8B y 70B), cada uno entrenado para su propio modelo base: el adaptador y el
+modelo deben coincidir. El siguiente paso es Qwen3-8B-Base, que debería seguir mejor el original
+que el de 4B (no medido aquí: todas las mediciones de este repositorio son del 4B). Ejemplo,
+en Ubuntu:
+
+```bash
+pip install -U huggingface_hub -r ~/llama.cpp/requirements/requirements-convert_lora_to_gguf.txt
+hf download YixuanEvenXu/Qwen3-8B-Base-HIP-adapter --local-dir ~/hip/adapter-8b
+python3 ~/llama.cpp/convert_lora_to_gguf.py --base-model-id Qwen/Qwen3-8B-Base \
+    --outtype q8_0 --outfile ~/hip/hip-qwen3-8b-base.gguf ~/hip/adapter-8b
+hf download mradermacher/Qwen3-8B-Base-GGUF Qwen3-8B-Base.Q4_K_M.gguf --local-dir ~/hip
+echo 'export HUMANIZE_BASE_MODEL=$HOME/hip/Qwen3-8B-Base.Q4_K_M.gguf' >> ~/.bashrc
+echo 'export HUMANIZE_ADAPTER=$HOME/hip/hip-qwen3-8b-base.gguf' >> ~/.bashrc
+source ~/.bashrc && python3 scripts/install_model.py
+```
+
+`install_model.py` lee las dos cabeceras y rechaza una combinación equivocada, y la reescritura
+de prueba falla con el mensaje de llama.cpp si el adaptador no corresponde al modelo. Memoria,
+con el adaptador (~0,8 GB) y el contexto: el 8B en Q4_K_M necesita unos 7 GB (una GPU de 8 GB
+lo contiene entero; con 8 GB de RAM corre en CPU, despacio), en Q8_0 unos 11 GB. El 14B en
+Q4_K_M necesita unos 11 GB: una GPU de 8 GB contiene la mayor parte (`HUMANIZE_GPU=30`) y el
+resto va a la RAM. Elige el archivo **Base**, no el de chat, y quita las dos variables para
+volver al de 4B.
+
 Corre en CPU: bastan 8 GB de RAM libre, sin GPU. En una Mac M4 tarda de 30 a 60 segundos
 por párrafo; en una PC de hace unos años, de 1 a 3 minutos.
 

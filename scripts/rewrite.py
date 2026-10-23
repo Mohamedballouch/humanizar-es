@@ -94,6 +94,13 @@ def base_model_path(environ=None):
     return environ.get("HUMANIZE_BASE_MODEL") or os.path.join(MODEL_DIR, BASE)
 
 
+def adapter_path(environ=None):
+    """The HIP adapter: $HUMANIZE_ADAPTER, an adapter in GGUF for a bigger base model (it must
+    be the one trained for that model: Qwen3-8B-Base, say), or hip-qwen3-4b-base.gguf."""
+    environ = os.environ if environ is None else environ
+    return environ.get("HUMANIZE_ADAPTER") or os.path.join(MODEL_DIR, ADAPTER)
+
+
 def device_args(environ=None):
     """Where llama.cpp runs the model. The CPU by default: on a Mac the GPU froze the screen
     while the model ran. HUMANIZE_GPU=1 (or yes, on, all) puts every layer on the GPU;
@@ -186,7 +193,7 @@ def _run_llama(prompt_file, paragraph, threads, temperature):
     llama = llama_binary()
     generated = int(len(paragraph.split()) * 3) + 100
     cmd = [llama, "-m", base_model_path(),
-           "--lora", os.path.join(MODEL_DIR, ADAPTER),
+           "--lora", adapter_path(),
            *device_args(), "-t", str(threads),
            "-c", str(context_size(paragraph, generated)), "-n", str(generated),
            "--temp", str(temperature), "--top-p", "0.95",
@@ -403,7 +410,7 @@ def main():
     if not llama_binary():
         print("ERROR: llama.cpp is missing. " + HOW_TO_INSTALL_LLAMA, file=sys.stderr)
         return 2
-    for path in (base_model_path(), os.path.join(MODEL_DIR, ADAPTER)):
+    for path in (base_model_path(), adapter_path()):
         if not os.path.isfile(path):
             print(f"ERROR: {path} is missing; run scripts/install_model.py", file=sys.stderr)
             return 2
