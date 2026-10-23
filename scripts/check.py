@@ -314,6 +314,16 @@ def main():
         for f, missing in warnings:
             print(f"  {short_name(f, 30)}: " + ", ".join(f"«{x}»" for x in missing))
 
+    count = {f: len([b for b in re.split(r"\n[ \t]*\n", t.strip()) if b.strip()])
+             for f, t in texts.items()}
+    split = [f for f in args.variants if count[f] != count[args.original]]
+    if split:
+        failed = True
+        print(f"\nPARAGRAPHS: the original has {count[args.original]}; "
+              + ", ".join(f"{short_name(f, 30)} has {count[f]}" for f in split) + ".")
+        print("  A rewrite keeps the original's paragraphs: an abstract stays ONE paragraph.\n"
+              "  Join them back (rewrite.py --max-words rewrites a long one in parts).")
+
     changed = []
     for f in args.variants:
         lost = numbers_lost(texts[args.original], texts[f])

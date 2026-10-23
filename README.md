@@ -291,6 +291,10 @@ python3 scripts/tells.py my-text.txt rewritten.txt       # stock AI phrases left
 python3 scripts/rewrite.py my-text.txt -o rewritten.txt --concepts concepts.txt --only 6,11
 ```
 
+A long paragraph that keeps losing terms (an abstract of 150+ words): add `--max-words 100`.
+It is rewritten in runs of whole sentences and stays **one** paragraph; never split it into
+paragraphs by hand (`check.py` fails when the number of paragraphs changes).
+
 Don't ask ChatGPT to fix it: it puts back the fingerprint the base model removed.
 
 **4. Rebuild the rhythm** (the language is detected automatically):
@@ -404,7 +408,7 @@ No. It changes who wrote the sentences and their rhythm, not the spelling.
 Three of four essays reached 0% in Grammarly, and the latest one passes Grammarly, GPTZero
 and ZeroGPT at once. The pieces that can be deterministic are (the joining is seeded;
 ZeroGPT gives the same score for the same text), output that copies the original is
-refused, and 119 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
+refused, and 122 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
 over time, which is why every session carries controls.
 
 **Does the selection step send my text anywhere?**
@@ -456,7 +460,7 @@ humanizar-es/
 │   └── join.py              stage 3: rebuild the rhythm of each paragraph
 ├── examples/                worked examples in Spanish and English
 ├── references/              every measurement, and how to measure
-└── tests/                   119 tests on Ubuntu, macOS and Windows (no network, no model)
+└── tests/                   122 tests on Ubuntu, macOS and Windows (no network, no model)
 ```
 
 The old script names (`hip.py`, `unir.py`, `verificar_fidelidad.py`, `instalar_hip.py`)

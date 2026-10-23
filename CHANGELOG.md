@@ -1,5 +1,17 @@
 # Changelog
 
+## 5.1.0 — October 23, 2026
+
+**An abstract stays one paragraph.** On a 250-word abstract the model kept dropping terms,
+and the agent split it into four paragraphs to rewrite it, then delivered four.
+
+- `rewrite.py --max-words N` rewrites a paragraph longer than N words in runs of whole
+  sentences (never inside «et al.», math or braces), each with its own guards, and puts it
+  back as one paragraph.
+- `check.py` fails when a version has a different number of paragraphs than the original.
+- SKILL.md: never split or merge paragraphs; a long one that keeps losing terms is redone
+  with `--max-words 100`.
+
 ## 5.0.0 — October 23, 2026
 
 **One pipeline again: the base model.** The Claude pipeline (4.1.0–4.4.1), where the agent

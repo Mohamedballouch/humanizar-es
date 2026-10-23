@@ -85,6 +85,20 @@ class Check(unittest.TestCase):
             self.assertIn("LOST", r.stdout)
             self.assertIn("«no contradiccion»", r.stdout)
 
+    def test_a_split_paragraph_fails_the_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            orig, split = os.path.join(tmp, "o.txt"), os.path.join(tmp, "s.txt")
+            with open(orig, "w", encoding="utf-8") as fh:
+                fh.write("The microgrid saves 5.7% of the cost. The supervisor is fast.\n")
+            with open(split, "w", encoding="utf-8") as fh:
+                fh.write("The microgrid saves 5.7% of the cost.\n\nThe supervisor is fast.\n")
+            conc = os.path.join(tmp, "c.txt")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            r = run(sys.executable, script("check.py"), orig, split, "--concepts", conc)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("PARAGRAPHS: the original has 1", r.stdout)
+
     def test_negations_in_english(self):
         self.assertIn("not the", check.negations("This is not the answer."))
         self.assertIn("never again", check.negations("It will never again happen."))
@@ -494,6 +508,51 @@ class Rewrite(unittest.TestCase):
             r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--only", "2", env=env)
             self.assertEqual(r.returncode, 2)
             self.assertIn("same count", r.stderr)
+
+    def test_a_long_paragraph_is_split_in_whole_sentences(self):
+        p = ("We propose a supervisor for six agents. It was tested by Smith et al. on four days "
+             "with care. Profit rose by 5.7% at the smallest budget of all. The gains were "
+             "smaller than predicted. Neither superiority nor equivalence was found here.")
+        runs = rewrite.parts(p, "text", 20)
+        self.assertGreater(len(runs), 1)
+        self.assertEqual(" ".join(runs), p)
+        self.assertTrue(all(len(r.split()) <= 20 for r in runs))
+        self.assertIn("Smith et al. on four days", " ".join(r for r in runs if "Smith" in r))
+        self.assertEqual(rewrite.parts(p, "text", 0), [p])     # off by default
+        self.assertEqual(rewrite.parts(p, "text", 500), [p])   # short enough
+        tex = ("We follow \\citet{a. B} closely. The cost is $x. Y$ per unit in every case we "
+               "ran. It drops by 5\\% overall. The rest stays the same as before.")
+        runs = rewrite.parts(tex, "latex", 10)
+        self.assertGreater(len(runs), 1)
+        self.assertTrue(any("\\citet{a. B} closely." in r for r in runs))
+        self.assertTrue(any("$x. Y$" in r for r in runs))
+        self.assertEqual(rewrite.parts("A comment % here.\nThen more words go on.", "latex", 2),
+                         ["A comment % here.\nThen more words go on."])
+
+    def test_max_words_keeps_one_paragraph(self):
+        text = ("Agents run every hour on the line. A supervisor picks a directive for them. "
+                "Three methods search the same space. The language model reads the history "
+                "first. Gains were smaller than predicted.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            log = os.path.join(tmp, "calls.txt")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\n"
+                         f"open({log!r}, 'a').write('x')\n"
+                         "sys.stdout.write(' then went on with other words in its own way.\\n</target_text>')\n")
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                    "--max-words", "12", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("one paragraph in", r.stdout)
+            result = read(out).strip()
+            self.assertNotIn("\n", result)
+            self.assertGreater(len(read(log)), 1)  # one call per part
 
     def test_lead_replaces_the_opening_words(self):
         prompt, lead = rewrite.build_prompt("Uno de los problemas más importantes.", lead="Desde la")

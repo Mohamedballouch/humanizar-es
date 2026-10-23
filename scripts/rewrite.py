@@ -385,6 +385,10 @@ def main():
                     "from the original, keeping the others and their hand fixes")
     ap.add_argument("--lead", help="opening words for the rewritten paragraphs instead of the "
                     "original's first two (e.g. \"Desde la\"); use it with --only")
+    ap.add_argument("--max-words", dest="max_words", type=int, default=0, metavar="N",
+                    help="rewrite a paragraph longer than N words in runs of whole sentences "
+                         "and put it back as one paragraph (for a long abstract that keeps "
+                         "losing terms; try 100)")
     ap.add_argument("--temperature", type=float, default=1.0,
                     help="sampling temperature (1.0); 1.1-1.2 gives more varied candidates")
     ap.add_argument("--candidates", type=int, metavar="N",
@@ -520,6 +524,36 @@ def note(report, label, p, text, fallback, lost, lang, fmt="text"):
         report["untouched"].append(f"{label} (" + ", ".join(c for c, _ in lost.most_common(2)) + ")")
 
 
+SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9ÁÉÍÓÚÑ¿¡«\"“(\\])")
+
+
+def parts(p, fmt, max_words):
+    """A long paragraph in runs of whole sentences of up to max_words words each (a longer
+    sentence is a run alone), to be rewritten one by one and put back as ONE paragraph: the
+    model loses terms on long paragraphs, and an abstract must stay a single paragraph.
+    [p] when it is short, or a LaTeX paragraph with a comment (a line end matters there)."""
+    if not max_words or len(p.split()) <= max_words:
+        return [p]
+    if fmt == "latex":
+        if re.search(r"(?<!\\)%", p):
+            return [p]
+        sentences = latex.sentence_lines(re.sub(r"\s*\n\s*", " ", p.strip())).split("\n")
+    else:
+        sentences = []
+        for s in SENTENCE_END.split(" ".join(p.split())):
+            if sentences and join.no_period_end(sentences[-1]):
+                sentences[-1] += " " + s  # «et al. Smith», «Fig. 3»: not a sentence end
+            else:
+                sentences.append(s)
+    runs = []
+    for s in sentences:
+        if runs and len(runs[-1].split()) + len(s.split()) <= max_words:
+            runs[-1] += " " + s
+        else:
+            runs.append(s)
+    return runs
+
+
 def rewrite_block(i, p, args, concepts, lang, report):
     """(rewritten block, status) for block i. Code, tables, headings, quotations and
     titles stay; a list is rewritten item by item and keeps its markers."""
@@ -539,6 +573,17 @@ def rewrite_block(i, p, args, concepts, lang, report):
             done += text != item
             pairs.append((marker, text))
         return blocks.rebuild(pairs, fmt), f"list, {done} of {count} items rewritten"
+    runs = parts(p, fmt, getattr(args, "max_words", 0))
+    if len(runs) > 1:
+        out = []
+        for j, run in enumerate(runs, 1):
+            text, _, fallback, lost = rewrite_unit(run, args, concepts, lang,
+                                                   args.lead if j == 1 else None)
+            note(report, f"{i} (part {j})", run, text, fallback, lost, lang, fmt)
+            out.append(text)
+        done = sum(t != r for t, r in zip(out, runs))
+        return ("\n" if fmt == "latex" else " ").join(out), \
+            f"one paragraph in {len(runs)} parts, {done} rewritten"
     text, n, fallback, lost = rewrite_unit(p, args, concepts, lang, args.lead)
     note(report, str(i), p, text, fallback, lost, lang, fmt)
     status = ("unchanged" if text == p else f"done, {FALLBACK_STATUS[fallback]} {n} tries"

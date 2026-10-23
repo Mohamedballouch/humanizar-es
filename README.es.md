@@ -294,6 +294,10 @@ python3 scripts/tells.py mi-texto.txt reescrito.txt      # frases hechas de IA, 
 python3 scripts/rewrite.py mi-texto.txt -o reescrito.txt --concepts concepts.txt --only 6,11
 ```
 
+Un párrafo largo que sigue perdiendo términos (un resumen de 150+ palabras): añade
+`--max-words 100`. Se reescribe en tramos de oraciones completas y sigue siendo **un**
+párrafo; nunca lo partas a mano (`check.py` falla si cambia el número de párrafos).
+
 No le pidas a ChatGPT que lo corrija: le devuelve la huella que el modelo base quitó.
 
 **4. Reconstruye el ritmo** (el idioma se detecta solo):
@@ -408,7 +412,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 119 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 122 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -461,7 +465,7 @@ humanizar-es/
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   119 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   122 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,

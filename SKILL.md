@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "5.0.0"
+  version: "5.1.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -144,7 +144,11 @@ python3 <skill>/scripts/rewrite.py 00-original.txt -o 01-rewritten.txt --concept
 
 At the end it reports which paragraphs it left as the original and the concept they kept
 losing (check its spelling in `concepts.txt`), and which ones copied long stretches of the
-original in every try. Rerun only those paragraphs, with more `--tries`. A try that drops a
+original in every try. Rerun only those paragraphs, with more `--tries`. A **long
+paragraph** (an abstract of 150+ words) that keeps losing terms: redo it with
+`--only 1 --max-words 100`, which rewrites it in runs of whole sentences, each guarded on its
+own, and puts it back as **one** paragraph. Never split it into paragraphs yourself: the
+rewrite keeps the original's paragraphs, and `check.py` fails when their number changes. A try that drops a
 figure (a year, an amount, a percentage) is retried; if every try does, the closest is kept
 and the report names the figure to put back: that is a one-word fix. A try that changes a
 URL, a link or `inline code` is never used. List items are reported as `3.2` (paragraph 3,
@@ -299,6 +303,8 @@ python3 <skill>/scripts/join.py 01-rewritten.txt -o 02-final.txt --concepts conc
   That adds the fingerprint this recipe removes.
 - **Add typos, remove commas or add double spaces.** Not needed: double spaces moved
   nothing (84% → 84%), and joining sentences lowered the score more than any error.
+- **Change the paragraphs.** A journal or conference abstract is one paragraph and stays
+  one; never split a paragraph to rewrite it (use `--max-words`) or merge two.
 - **Feed `rewrite.py` its own output.** A second pass drifts from the meaning (in testing
   it ended at 91%). Candidates are different: each is a fresh first pass from the original.
 - **Accept a candidate that changes a quotation or adds a source.** The guard catches the
