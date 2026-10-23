@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.3.2 — October 23, 2026
+
+- `HUMANIZE_GPU_DEVICE=Vulkan1` pins the GPU run to one device of `llama-completion
+  --list-devices`, for a laptop whose integrated graphics are listed beside the discrete GPU.
+
+## 4.3.1 — October 23, 2026
+
+- The GPU instructions lead with Vulkan (`-DGGML_VULKAN=ON`), which needs no CUDA toolkit
+  and runs on NVIDIA too. An RTX 50 (Blackwell) needs CUDA 12.8 or later, and a
+  distribution's own `nvidia-cuda-toolkit` can be older (12.4 on Ubuntu 26.04), so the
+  CUDA build fails there with «Unsupported gpu architecture 'compute_120a'».
+
 ## 4.3.0 — October 23, 2026
 
 **The GPU, on request.**

@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. Two pipelines: by default the agent rewrites and scripts guard every paragraph (prose.py export/import: figures, concepts, quotes, references, links, LaTeX placeholders); on request, or for paragraphs a detector still flags, a local base model without chat training rewrites (rewrite.py, join.py --pauses 2, tells.py, candidates), the pipeline measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "4.3.0"
+  version: "4.3.2"
   languages: en, es
   evidence: references/evidence.md
 ---

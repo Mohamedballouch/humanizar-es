@@ -97,13 +97,17 @@ def base_model_path(environ=None):
 def device_args(environ=None):
     """Where llama.cpp runs the model. The CPU by default: on a Mac the GPU froze the screen
     while the model ran. HUMANIZE_GPU=1 (or yes, on, all) puts every layer on the GPU;
-    a number from 2 up puts that many of the 36 there, for a GPU with less than ~5 GB free."""
+    a number from 2 up puts that many of the 36 there, for a GPU with less than ~5 GB free.
+    HUMANIZE_GPU_DEVICE=Vulkan1 (a name from `llama-completion --list-devices`) pins the run
+    to that GPU, for a laptop that lists an integrated one too."""
     environ = os.environ if environ is None else environ
     gpu = environ.get("HUMANIZE_GPU", "").strip().lower()
+    device = environ.get("HUMANIZE_GPU_DEVICE", "").strip()
+    pin = ["-dev", device] if device else []
     if gpu in ("1", "yes", "on", "true", "all"):
-        return ["-ngl", "99"]
+        return ["-ngl", "99"] + pin
     if gpu.isdigit() and int(gpu) > 1:
-        return ["-ngl", gpu]
+        return ["-ngl", gpu] + pin
     return ["-ngl", "0", "-dev", "none"]
 
 
