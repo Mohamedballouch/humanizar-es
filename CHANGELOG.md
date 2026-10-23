@@ -1,5 +1,15 @@
 # Changelog
 
+## 5.0.0 — October 23, 2026
+
+**One pipeline again: the base model.** The Claude pipeline (4.1.0–4.4.1), where the agent
+rewrote the prose itself, is removed: it was never measured, and chat-model rewrites scored
+64–100% in Grammarly. The skill always rewrites with the local base model now.
+
+- `scripts/prose.py` and its tests are gone; SKILL.md has one pipeline, its steps numbered
+  1 to 9 (4 is the installation check), and the README has no two-pipelines table.
+- `install.py` says the model and llama.cpp are needed, and how to get llama.cpp on Linux.
+
 ## 4.4.1 — October 23, 2026
 
 - README: a bigger model is not claimed to be better. The paper (arXiv:2605.19516, §4.2)

@@ -16,22 +16,9 @@ humana: **0% en Grammarly, 0% en ZeroGPT y 0% IA / 98% humano en GPTZero**, con 
 ensayo de 1,990 palabras que empezó en 45%. Úsalo como *skill* de tu agente (Claude Code,
 Codex, OpenCode, Antigravity), o a mano.
 
-## Dos procesos
-
-| | **Proceso Claude** (el de la skill por defecto) | **Proceso con modelo base** |
-|---|---|---|
-| Quién escribe | Tu agente, párrafo por párrafo | Un modelo base local sin entrenamiento de chat (Qwen3-4B-Base + HIP) |
-| Qué lo vigila | `prose.py import`: cada cifra, concepto, cita, referencia, enlace y marcador de LaTeX, o el párrafo se rechaza | Las mismas comprobaciones, dentro de `rewrite.py` |
-| Necesita | Nada que instalar | Una descarga única de 4.6 GB; de 30 s a 3 min por párrafo en CPU |
-| Medido | **Todavía no.** Las reescrituras de otros modelos de chat dieron 64–100% en Grammarly | Los resultados de abajo |
-| Tu texto | Lo lee el proveedor de tu agente, como todo lo que lee tu agente | Se reescribe en tu computadora; a mano, nunca sale de ella |
-
-La skill usa el proceso Claude salvo que pidas el modelo base, y ofrece el modelo base para
-los párrafos que un detector todavía marque. A mano, sin agente, es el proceso con modelo
-base. Todas las cifras de abajo son del proceso con modelo base.
-
-No es un cambiador de sinónimos ni un generador de faltas de ortografía. El proceso con
-modelo base tiene cuatro etapas, y cada una existe porque un experimento controlado mostró
+No es un cambiador de sinónimos ni un generador de faltas de ortografía. Reescribe un modelo
+base local sin entrenamiento de chat (Qwen3-4B-Base + HIP), en tu computadora. El proceso
+tiene cuatro etapas, y cada una existe porque un experimento controlado mostró
 qué mide de verdad un detector: una variable a la vez, el mismo texto en cada condición, y
 un texto humano de control y el original de IA en cada sesión.
 
@@ -55,7 +42,7 @@ midió en mitades. El ensayo de Dragon Ball se corrió con una versión anterior
 
 ---
 
-## El método (proceso con modelo base)
+## El método
 
 ```
  original ─► 1. reescribe ─► 2. fidelidad ─► 3. ritmo ──► 4. selección ──► final
@@ -210,8 +197,6 @@ seleccionar candidatos de lo que tu detector todavía marque.
 
 ### El modelo (una vez, ~4.6 GB)
 
-Solo para el proceso con modelo base: el proceso Claude no necesita instalar nada.
-
 Necesitas Python 3.9+ (sin paquetes extra) y [llama.cpp](https://github.com/ggml-org/llama.cpp):
 
 | | macOS y Linux | Windows |
@@ -283,8 +268,7 @@ ejecución en la dedicada. Es el mismo modelo en los dos casos; las mediciones s
 
 ## Úsalo a mano
 
-A mano, sin agente, usas el proceso con modelo base. En Windows escribe `python` donde dice
-`python3`.
+A mano, sin agente: en Windows escribe `python` donde dice `python3`.
 
 **1. Anota lo que no se puede perder** en `concepts.txt`: nombres propios completos,
 cifras, términos. Uno por línea, variantes con `|`, `*` para prefijos.
@@ -424,7 +408,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 123 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 119 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -468,7 +452,6 @@ humanizar-es/
 ├── install.py               instala la skill (install.sh: atajo para macOS/Linux)
 ├── scripts/
 │   ├── install_model.py     baja el modelo (una vez)
-│   ├── prose.py             proceso Claude: la prosa a un archivo de trabajo y de vuelta, vigilada
 │   ├── rewrite.py           etapas 1, 2 y 4: reescribe, cuida la fidelidad, candidatos
 │   ├── check.py             etapa 2: conceptos y negaciones, original contra reescritura
 │   ├── tells.py             etapas 2 y 4: frases hechas de IA por párrafo, qué regenerar
@@ -478,7 +461,7 @@ humanizar-es/
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   123 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   119 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,

@@ -16,22 +16,8 @@ human: **0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero**, on t
 1,990-word essay that started at 45%. Use it as a *skill* for your coding agent (Claude
 Code, Codex, OpenCode, Antigravity), or by hand.
 
-## Two pipelines
-
-| | **Claude pipeline** (the skill's default) | **Base-model pipeline** |
-|---|---|---|
-| Who writes | Your agent, paragraph by paragraph | A local base model without chat training (Qwen3-4B-Base + HIP) |
-| What guards it | `prose.py import`: every figure, concept, quotation, reference, link and LaTeX placeholder, or the paragraph is refused | The same checks, inside `rewrite.py` |
-| Needs | Nothing to install | A one-time 4.6 GB download; 30 s to 3 min per paragraph on CPU |
-| Measured | **Not yet.** Rewrites by other chat models scored 64–100% in Grammarly | The results below |
-| Your text | Read by your agent's provider, like anything your agent reads | Rewritten on your computer; by hand, it never leaves it |
-
-The skill runs the Claude pipeline unless you ask for the base model, and offers the base
-model for the paragraphs a detector still flags. Run by hand, without an agent, it is the
-base-model pipeline. Every number below is the base-model pipeline's.
-
-It is not a synonym spinner or a typo generator. The base-model pipeline has four stages,
-and every one exists because a controlled experiment showed what a detector actually
+It is not a synonym spinner or a typo generator. A local base model without chat training
+(Qwen3-4B-Base + HIP) does the rewriting, on your computer. The pipeline has four stages, and every one exists because a controlled experiment showed what a detector actually
 measures: one variable at a time, the same text in every condition, and a human-written
 control and the AI original in every session.
 
@@ -55,7 +41,7 @@ halves. The Dragon Ball essay ran on an earlier version of the pipeline.*
 
 ---
 
-## The method (base-model pipeline)
+## The method
 
 ```
  original ─► 1. rewrite ──► 2. fidelity ──► 3. rhythm ──► 4. selection ──► final
@@ -210,8 +196,6 @@ rhythm, and select candidates for whatever your detector still flags.
 
 ### The model (once, ~4.6 GB)
 
-Only for the base-model pipeline: the Claude pipeline needs nothing installed.
-
 You need Python 3.9+ (no extra packages) and [llama.cpp](https://github.com/ggml-org/llama.cpp):
 
 | | macOS and Linux | Windows |
@@ -281,8 +265,7 @@ the discrete one. It is the same model either way; the measurements were made on
 
 ## Use it by hand
 
-By hand, without an agent, you run the base-model pipeline. On Windows, type `python`
-where it says `python3`.
+By hand, without an agent: on Windows, type `python` where it says `python3`.
 
 **1. List what must not be lost** in `concepts.txt`: full proper names, figures, terms.
 One per line, variants with `|`, `*` for prefixes.
@@ -421,7 +404,7 @@ No. It changes who wrote the sentences and their rhythm, not the spelling.
 Three of four essays reached 0% in Grammarly, and the latest one passes Grammarly, GPTZero
 and ZeroGPT at once. The pieces that can be deterministic are (the joining is seeded;
 ZeroGPT gives the same score for the same text), output that copies the original is
-refused, and 123 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
+refused, and 119 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
 over time, which is why every session carries controls.
 
 **Does the selection step send my text anywhere?**
@@ -464,7 +447,6 @@ humanizar-es/
 ├── install.py               installs the skill (install.sh: shortcut for macOS/Linux)
 ├── scripts/
 │   ├── install_model.py     downloads the model (once)
-│   ├── prose.py             Claude pipeline: the prose out to a work file and back, guarded
 │   ├── rewrite.py           stages 1, 2 and 4: rewrite, guard fidelity, candidates
 │   ├── check.py             stage 2: concepts and negations, original vs rewrite
 │   ├── tells.py             stages 2 and 4: stock AI phrases per paragraph, what to regenerate
@@ -474,7 +456,7 @@ humanizar-es/
 │   └── join.py              stage 3: rebuild the rhythm of each paragraph
 ├── examples/                worked examples in Spanish and English
 ├── references/              every measurement, and how to measure
-└── tests/                   123 tests on Ubuntu, macOS and Windows (no network, no model)
+└── tests/                   119 tests on Ubuntu, macOS and Windows (no network, no model)
 ```
 
 The old script names (`hip.py`, `unir.py`, `verificar_fidelidad.py`, `instalar_hip.py`)
