@@ -326,15 +326,24 @@ def markup_problem(original, rewritten):
     return None
 
 
+STRAY = "$\\{}#*_|~^<>@"
+
+
+def symbols_added(original, rewritten):
+    """Markup characters the try has more of than the original («$», «\\», «{»…): the
+    model sometimes wraps a figure in «$…$» or starts a list. A one-character fix each."""
+    return [c for c in STRAY if rewritten.count(c) > original.count(c)]
+
+
 numbers_lost = check.numbers_lost  # a try that drops a year or an amount is retried
 numbers_added = check.numbers_added  # a try that invents one is never used
 
 
 # Problems that still leave a usable try, best first: if every try has one, the best is
 # kept and a warning says what to look at. Any other problem means the try is not used.
-SOFT = ("(AI tells)", "(number changed)", "(copied)")
+SOFT = ("(symbols added)", "(AI tells)", "(number changed)", "(copied)")
 FALLBACK_STATUS = {"(AI tells)": "fewest tells of", "(number changed)": "a figure to put back, best of",
-                   "(copied)": "least copied of"}
+                   "(copied)": "least copied of", "(symbols added)": "stray symbols to remove, best of"}
 
 
 def acceptable(p, r, wanted, concepts, max_copied, max_tells=None, lang="en"):
@@ -357,6 +366,8 @@ def acceptable(p, r, wanted, concepts, max_copied, max_tells=None, lang="en"):
         return "(number changed)", share
     if max_tells is not None and tells.score(r, lang) > max_tells:
         return "(AI tells)", share
+    if symbols_added(p, r):
+        return "(symbols added)", share
     return None, share
 
 
@@ -500,7 +511,8 @@ def rewrite_unit(p, args, concepts, lang, lead=None):
         if problem in SOFT:
             pp, pr = plain
             metric = (tells.score(pr, lang) if problem == "(AI tells)" else
-                      len(numbers_lost(pp, pr)) if problem == "(number changed)" else share)
+                      len(numbers_lost(pp, pr)) if problem == "(number changed)" else
+                      len(symbols_added(pp, pr)) if problem == "(symbols added)" else share)
             soft.append((SOFT.index(problem), metric, text, problem))
         else:
             lost[problem] += 1
@@ -520,11 +532,16 @@ def note(report, label, p, text, fallback, lost, lang, fmt="text"):
         report["tells"].append(f"{label} (score {tells.score(text, lang)})")
     elif fallback == "(number changed)":
         report["numbers"].append(f"{label} ({', '.join(numbers_lost(p, text))})")
+    elif fallback == "(symbols added)":
+        report["symbols"].append(f"{label} ({' '.join(symbols_added(p, text))})")
     elif text == p:
         report["untouched"].append(f"{label} (" + ", ".join(c for c, _ in lost.most_common(2)) + ")")
 
 
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9ÁÉÍÓÚÑ¿¡«\"“(\\])")
+
+
+AUTO_PARTS, AUTO_PARTS_WORDS = 150, 100  # a paragraph this long that fails is redone in parts
 
 
 def parts(p, fmt, max_words):
@@ -574,6 +591,13 @@ def rewrite_block(i, p, args, concepts, lang, report):
             pairs.append((marker, text))
         return blocks.rebuild(pairs, fmt), f"list, {done} of {count} items rewritten"
     runs = parts(p, fmt, getattr(args, "max_words", 0))
+    if len(runs) == 1:
+        text, n, fallback, lost = rewrite_unit(p, args, concepts, lang, args.lead)
+        if text == p and len(p.split()) > AUTO_PARTS:  # a long paragraph kept losing terms
+            runs = parts(p, fmt, AUTO_PARTS_WORDS)
+            if len(runs) > 1:
+                print(f"  paragraph {i}: left as the original in {n} tries; "
+                      f"rewriting it in {len(runs)} parts", flush=True)
     if len(runs) > 1:
         out = []
         for j, run in enumerate(runs, 1):
@@ -584,7 +608,6 @@ def rewrite_block(i, p, args, concepts, lang, report):
         done = sum(t != r for t, r in zip(out, runs))
         return ("\n" if fmt == "latex" else " ").join(out), \
             f"one paragraph in {len(runs)} parts, {done} rewritten"
-    text, n, fallback, lost = rewrite_unit(p, args, concepts, lang, args.lead)
     note(report, str(i), p, text, fallback, lost, lang, fmt)
     status = ("unchanged" if text == p else f"done, {FALLBACK_STATUS[fallback]} {n} tries"
               if fallback else f"done, try {n}" if n > 1 else "done")
@@ -594,7 +617,7 @@ def rewrite_block(i, p, args, concepts, lang, report):
 def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
     output, t0 = [], time.time()
     fmt = getattr(args, "fmt", "text")
-    report = {"untouched": [], "copied": [], "tells": [], "numbers": []}
+    report = {"untouched": [], "copied": [], "tells": [], "numbers": [], "symbols": []}
     for i, p in enumerate(paragraphs, 1):
         if kept is not None and i not in only:
             output.append(kept[i - 1])
@@ -628,6 +651,9 @@ def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
     if report["numbers"]:
         print("WARNING: every try dropped or changed a figure; the closest was kept. Put the "
               "figure back by hand (a one-word fix): " + "; ".join(report["numbers"]) + ".")
+    if report["symbols"]:
+        print("WARNING: every try added markup the original does not have; the cleanest was "
+              "kept. Delete the stray symbols by hand: " + "; ".join(report["symbols"]) + ".")
     if report["tells"]:
         print("WARNING: every try kept AI tells above --max-tells; the one with the fewest was "
               "kept: " + "; ".join(report["tells"]) + ".")

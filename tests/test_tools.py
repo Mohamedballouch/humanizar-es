@@ -99,6 +99,35 @@ class Check(unittest.TestCase):
             self.assertEqual(r.returncode, 1, r.stdout)
             self.assertIn("PARAGRAPHS: the original has 1", r.stdout)
 
+    def test_a_minus_sign_is_part_of_the_figure(self):
+        o = "The interval is -0.7 to +2.8, COVID-19 hit pages 5-7, and $-1.5$ or (−3) units."
+        self.assertEqual(check.numbers_lost(o, o.replace("+2.8", "2.8")), [])  # «+» is no sign
+        self.assertEqual(check.numbers_lost(o, o.replace("-0.7", "0.7")), ["-0.7"])
+        self.assertEqual(check.numbers_added(o, o.replace("-0.7", "0.7")), ["0.7"])
+        self.assertEqual(check.numbers_lost(o, o.replace("(−3)", "(-3)")), [])  # − is -
+        self.assertEqual(check.numbers_lost(o, o.replace("$-1.5$", "$1.5$")), ["-1.5"])
+        self.assertEqual(check.figures(o)[0]["19"], 1)  # COVID-19 has no negative 19
+        self.assertEqual(check.figures(o)[0]["7"], 1)   # nor «5-7» a negative 7
+
+    def test_british_and_american_spelling_are_reported(self):
+        o = "Optimization of the colour model and the modelling of the centre."
+        v = "Optimisation of the color model and the modelling of the center."
+        self.assertEqual(sorted(check.spelling_changes(o, v)),
+                         [("centre", "center"), ("colour", "color"), ("optimization", "optimisation")])
+        self.assertEqual(check.spelling_changes(o, o), [])
+        self.assertEqual(check.spelling_changes("We rise early.", "We rize early."), [])  # no «rise»->«rize» pair in the original
+
+    def test_check_counts_a_file_named_twice_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f, conc = os.path.join(tmp, "a.txt"), os.path.join(tmp, "c.txt")
+            with open(f, "w", encoding="utf-8") as fh:
+                fh.write("The microgrid saves money.\n")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            r = run(sys.executable, script("check.py"), f, f, "--concepts", conc)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIn("1/1 = 100%", r.stdout)
+
     def test_negations_in_english(self):
         self.assertIn("not the", check.negations("This is not the answer."))
         self.assertIn("never again", check.negations("It will never again happen."))
@@ -554,6 +583,49 @@ class Rewrite(unittest.TestCase):
             self.assertNotIn("\n", result)
             self.assertGreater(len(read(log)), 1)  # one call per part
 
+    def test_a_try_that_adds_markup_is_a_soft_problem(self):
+        o = "Profit rose by 5.7% at the smallest budget, and the agents kept learning every day."
+        r = "At the smallest budget profit went up by $5.7%$, while the agents went on learning daily."
+        self.assertEqual(rewrite.symbols_added(o, r), ["$"])
+        self.assertEqual(rewrite.acceptable(o, r, set(), [], 0.9)[0], "(symbols added)")
+        self.assertIn("(symbols added)", rewrite.SOFT)  # kept if every try has it, and reported
+        self.assertEqual(rewrite.symbols_added("Costs $5 a day.", "A day costs $5."), [])
+
+    def test_a_long_paragraph_that_fails_is_redone_in_parts(self):
+        sentences = ["The supervisor picks a directive for the microgrid every hour."] + [
+            f"Sentence number {w} talks about the agents and the line and the energy cost here."
+            for w in ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+                      "ten", "eleven", "twelve")]
+        text = " ".join(sentences) + "\n"
+        self.assertGreater(len(text.split()), rewrite.AUTO_PARTS)
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "fake.py")
+            # It drops «microgrid» whenever the source is long, like the real model did.
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nargs = sys.argv[1:]\n"
+                         "prompt = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                         "src = prompt.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+                         "words = src.split()[2:]\n"
+                         "out = ' '.join(w for w in words if len(src.split()) < 120 or w != 'microgrid')\n"
+                         "out = out.replace('talks about', 'is about').replace('every hour', 'each hour')\n"
+                         "sys.stdout.write(' ' + out + '\\n</target_text>')\n")
+            src, out, conc = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("rewriting it in", r.stdout)
+            result = read(out).strip()
+            self.assertNotIn("\n", result)       # still one paragraph
+            self.assertIn("microgrid", result)    # and the term is back
+            self.assertIn("is about", result)     # rewritten, not the original
+
     def test_lead_replaces_the_opening_words(self):
         prompt, lead = rewrite.build_prompt("Uno de los problemas más importantes.", lead="Desde la")
         self.assertEqual(lead, "Desde la")
@@ -841,7 +913,7 @@ class Rewrite(unittest.TestCase):
                 "open(c, 'w').write(str(n))\n"
                 "words = ['la semilla crece despacio', 'el árbol nace de la semilla',\n"
                 "         'de la semilla sale un árbol']\n"
-                "body = ' ' + words[n % 3] + ' y el lead fue ' + lead.replace(' ', '_') + ' en la vuelta ' + 'abcdefghijklmnopqrst'[n] + ' del bosque.'\n"
+                "body = ' ' + words[n % 3] + ' y el lead fue ' + lead.replace(' ', '+') + ' en la vuelta ' + 'abcdefghijklmnopqrst'[n] + ' del bosque.'\n"
                 "sys.stdout.buffer.write((body + '\\n</target_text>').encode('utf-8'))\n")
         return fake
 
@@ -864,7 +936,7 @@ class Rewrite(unittest.TestCase):
             self.assertEqual(files, ["p01-1.txt", "p01-2.txt", "p01-3.txt"])
             first = read(os.path.join(folder, files[0]))
             self.assertTrue(first.startswith("Desde la "), first)
-            self.assertIn("Desde_la", first)  # the lead reached the prompt
+            self.assertIn("Desde+la", first)  # the lead reached the prompt
             self.assertEqual(read(out), "Primero, ya corregido.\n\nSegundo, ya corregido.\n")
             self.assertIn("tells 0", r.stdout)
             self.assertIn("fewest tells first", r.stdout)

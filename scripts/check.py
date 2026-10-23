@@ -156,7 +156,11 @@ def negations(text):
 
 # Figures: numbers in digits, and roman numerals of two or more letters made of I, V and
 # X («siglo XX», «Phase II», «World War II»). ML, CV or DL are not numerals here.
-NUMBER = re.compile(r"\d+(?:[.,]\d+)*|\b(?=[IVX]{2,}\b)X{0,3}(?:IX|IV|V?I{0,3})\b")
+# A minus sign is part of the figure («-0.7» and «0.7» are opposite results) when it stands
+# where a sign can: after a space, «(», «[», «=», «$» or at the start, never inside «5-7»
+# or «COVID-19». A «+» is not: «+2.8» is 2.8.
+NUMBER = re.compile(r"(?:(?<![\w.,)\]])[-−](?=\d))?\d+(?:[.,]\d+)*"
+                    r"|\b(?=[IVX]{2,}\b)X{0,3}(?:IX|IV|V?I{0,3})\b")
 NUMBER_WORDS = {
     "en": "zero one two three four five six seven eight nine ten eleven twelve thirteen "
           "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(),
@@ -176,8 +180,15 @@ def figure_key(n):
     only in groups of exactly three digits after a first digit that is not 0); a decimal
     comma is a decimal point («0,05» = «0.05»); «1.5» and «15» stay different, and so do
     «0.50» and «0.5», because the precision a paper reports is part of the figure."""
+    n = n.replace("−", "-")
+    sign = "-" if n.startswith("-") else ""
+    n = n.lstrip("-")
     if not n[0].isdigit():
         return n
+    return sign + _unsigned_key(n)
+
+
+def _unsigned_key(n):
     if re.fullmatch(r"[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d{0,2}(?:\.\d{3})+", n):
         return n.replace(",", "").replace(".", "")
     return n.replace(",", ".")
@@ -216,6 +227,28 @@ def numbers_added(original, variant):
     want, _ = figures(original)
     words = _words_for(original)
     return [spelled[k] for k, n in (have - want).items() if k not in words for _ in range(n)]
+
+
+SPELLING = ((r"isation", "ization"), (r"ise", "ize"), (r"ised", "ized"), (r"ises", "izes"),
+            (r"ising", "izing"), (r"yse", "yze"), (r"ysed", "yzed"), (r"our", "or"),
+            (r"tre", "ter"), (r"lling", "ling"), (r"lled", "led"), (r"ogue", "og"))
+
+
+def spelling_changes(original, variant):
+    """[(original word, new word)] where the variant spells a word of the original the
+    other way («optimization» -> «optimisation»): the model writes British or American
+    spelling at random, and a paper keeps one."""
+    words = lambda t: set(re.findall(r"[A-Za-z]+", t.lower()))
+    before, after = words(original), words(variant)
+    out = []
+    for w in sorted(after - before):
+        for a, b in SPELLING:
+            for x, y in ((a, b), (b, a)):
+                if w.endswith(x) and len(w) > len(x) + 2:
+                    other = w[: -len(x)] + y
+                    if other in before and (other, w) not in out:
+                        out.append((other, w))
+    return out
 
 
 def short_name(path, width=18):
@@ -266,7 +299,8 @@ def main():
         print("ERROR: no concepts to check. Pass --concepts.", file=sys.stderr)
         return 2
 
-    files = [args.original] + args.variants
+    files = list(dict.fromkeys([args.original] + args.variants))  # a file named twice counts once
+    args.variants = [f for f in files if f != args.original]
     normalized = {f: norm(t) for f, t in texts.items()}
     print(f"Concepts: {len(concepts)} ({source})\n")
     print(f"{'concept':<30} " + " ".join(f"{short_name(f):>18}" for f in files))
@@ -323,6 +357,14 @@ def main():
               + ", ".join(f"{short_name(f, 30)} has {count[f]}" for f in split) + ".")
         print("  A rewrite keeps the original's paragraphs: an abstract stays ONE paragraph.\n"
               "  Join them back (rewrite.py --max-words rewrites a long one in parts).")
+
+    respelled = [(f, spelling_changes(texts[args.original], texts[f])) for f in args.variants]
+    respelled = [(f, c) for f, c in respelled if c]
+    if respelled:
+        print("\nSPELLING switched between British and American (put the original's back; "
+              "a one-word fix each):")
+        for f, changes in respelled:
+            print(f"  {short_name(f, 30)}: " + ", ".join(f"«{a}» -> «{b}»" for a, b in changes))
 
     changed = []
     for f in args.variants:

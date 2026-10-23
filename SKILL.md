@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "5.1.0"
+  version: "5.2.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -145,9 +145,11 @@ python3 <skill>/scripts/rewrite.py 00-original.txt -o 01-rewritten.txt --concept
 At the end it reports which paragraphs it left as the original and the concept they kept
 losing (check its spelling in `concepts.txt`), and which ones copied long stretches of the
 original in every try. Rerun only those paragraphs, with more `--tries`. A **long
-paragraph** (an abstract of 150+ words) that keeps losing terms: redo it with
-`--only 1 --max-words 100`, which rewrites it in runs of whole sentences, each guarded on its
-own, and puts it back as **one** paragraph. Never split it into paragraphs yourself: the
+paragraph** (over 150 words, like an abstract) that fails every try is redone on its own in
+runs of whole sentences, each guarded, and put back as **one** paragraph; for a shorter one
+that keeps losing terms, `--only 3 --max-words 100` does the same. A try that adds markup
+the original lacks (a stray `$`, `*` or `\`) is used only when every try does, and the report
+names the symbols to delete. Never split it into paragraphs yourself: the
 rewrite keeps the original's paragraphs, and `check.py` fails when their number changes. A try that drops a
 figure (a year, an amount, a percentage) is retried; if every try does, the closest is kept
 and the report names the figure to put back: that is a one-word fix. A try that changes a
@@ -161,7 +163,11 @@ python3 <skill>/scripts/check.py 00-original.txt 01-rewritten.txt --concepts con
 ```
 
 Besides concepts and negations, it lists the figures of the original missing from the
-rewrite: put each one back (a one-word fix) unless it was written out on purpose.
+rewrite: put each one back (a one-word fix) unless it was written out on purpose. A figure
+keeps its minus sign («-0.7» that became «0.7» is a lost figure: the result flipped). It
+also lists words switched between British and American spelling («optimization» ->
+«optimisation»): put the original's spelling back, one word each, and it fails if the number
+of paragraphs changed.
 
 Then scan it for tells of AI writing:
 

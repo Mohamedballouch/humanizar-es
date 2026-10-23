@@ -1,5 +1,19 @@
 # Changelog
 
+## 5.2.0 — October 23, 2026
+
+**Sturdier guards, from what went wrong on a real abstract.**
+
+- A figure keeps its minus sign: «-0.7» that became «0.7» was passing every guard; now it is
+  a lost figure and an added one, so the try is not used and `check.py` fails. «+2.8» is 2.8,
+  and «5-7» or «COVID-19» carry no negative number. «−» (U+2212) is a minus too.
+- A try that adds markup the original does not have (a stray `$`, `\`, `{`, `*`, `_`, `#`…)
+  is used only when every try does; the report names the symbols to delete.
+- A paragraph over 150 words that fails every try is redone automatically in runs of whole
+  sentences (`--max-words 100`) and stays one paragraph.
+- `check.py` lists words switched between British and American spelling, and counts a file
+  named twice once (it used to double its concepts).
+
 ## 5.1.0 — October 23, 2026
 
 **An abstract stays one paragraph.** On a 250-word abstract the model kept dropping terms,
