@@ -85,6 +85,13 @@ def resolve_model_dir(environ=None, home=None):
 MODEL_DIR = resolve_model_dir()
 
 
+def base_model_path(environ=None):
+    """The base model: $HUMANIZE_BASE_MODEL, a GGUF of Qwen3-4B-Base the user already has (any
+    quantization: the HIP adapter fits them all), or Qwen3-4B-Base.Q8_0.gguf in MODEL_DIR."""
+    environ = os.environ if environ is None else environ
+    return environ.get("HUMANIZE_BASE_MODEL") or os.path.join(MODEL_DIR, BASE)
+
+
 def build_prompt(paragraph, lead_words=2, lead=None, lang=None):
     """The format HIP was trained on, plus the first words of the paragraph so the
     model keeps writing in the language of the original. `lead` replaces those words:
@@ -159,7 +166,7 @@ def rewrite_paragraph(paragraph, threads=4, temperature=1.0, lead=None, lang=Non
 def _run_llama(prompt_file, paragraph, threads, temperature):
     llama = llama_binary()
     generated = int(len(paragraph.split()) * 3) + 100
-    cmd = [llama, "-m", os.path.join(MODEL_DIR, BASE),
+    cmd = [llama, "-m", base_model_path(),
            "--lora", os.path.join(MODEL_DIR, ADAPTER),
            "-ngl", "0", "-dev", "none", "-t", str(threads),
            "-c", str(context_size(paragraph, generated)), "-n", str(generated),
@@ -377,10 +384,9 @@ def main():
     if not llama_binary():
         print("ERROR: llama.cpp is missing. " + HOW_TO_INSTALL_LLAMA, file=sys.stderr)
         return 2
-    for f in MODEL_FILES:
-        if not os.path.isfile(os.path.join(MODEL_DIR, f)):
-            print(f"ERROR: {f} is missing in {MODEL_DIR}; run scripts/install_model.py",
-                  file=sys.stderr)
+    for path in (base_model_path(), os.path.join(MODEL_DIR, ADAPTER)):
+        if not os.path.isfile(path):
+            print(f"ERROR: {path} is missing; run scripts/install_model.py", file=sys.stderr)
             return 2
 
     with open(args.original, encoding="utf-8-sig") as fh:

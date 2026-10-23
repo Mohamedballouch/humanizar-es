@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. Two pipelines: by default the agent rewrites and scripts guard every paragraph (prose.py export/import: figures, concepts, quotes, references, links, LaTeX placeholders); on request, or for paragraphs a detector still flags, a local base model without chat training rewrites (rewrite.py, join.py --pauses 2, tells.py, candidates), the pipeline measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "4.1.0"
+  version: "4.2.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -230,7 +230,11 @@ fails here with its error; if something is missing, it says so.
    new terminal is needed; if it lives elsewhere, `HUMANIZE_LLAMA` holds the path to the
    `.exe`.
 2. **The model** (`Qwen3-4B-Base.Q8_0.gguf` and `hip-qwen3-4b-base.gguf`): if missing,
-   **ask permission** (~4.6 GB) and let `install_model.py` download it. It needs network
+   **ask permission** (~4.6 GB) and let `install_model.py` download it. If the user already
+   has Qwen3-4B-Base as a `.gguf` (any quantization), set `HUMANIZE_BASE_MODEL` to that file
+   instead: only the 280 MB adapter is downloaded, and the installer refuses a file that is
+   not Qwen3-4B and warns if it is the chat model. A Hugging Face folder (`.safetensors`)
+   is converted first with llama.cpp's `convert_hf_to_gguf.py`. It needs network
    access; if your environment blocks it, ask for approval or have the user run it in a
    terminal. If the download is cut, run it again: it resumes.
 

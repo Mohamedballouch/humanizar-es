@@ -10,6 +10,10 @@ Needs llama.cpp:
   macOS and Linux:  brew install llama.cpp
   Windows:          winget install llama.cpp   (and open a new terminal afterwards)
 
+Already have Qwen3-4B-Base? Point HUMANIZE_BASE_MODEL at its .gguf (any quantization):
+only the 280 MB adapter is downloaded, and the file is checked to be Qwen3-4B. A model in
+Hugging Face format (safetensors) becomes a .gguf with llama.cpp's convert_hf_to_gguf.py.
+
 Destination: $HUMANIZE_MODEL_DIR or ~/.cache/humanizar-es/hip. If the
 files are already there, it only verifies them. If it gets cut off, run it again: it
 resumes where it stopped. It checks the free space first. Where huggingface.co is
@@ -26,6 +30,7 @@ import argparse
 import hashlib
 import os
 import shutil
+import struct
 import sys
 import time
 import urllib.error
@@ -61,7 +66,10 @@ def download(name, url, sha, tries=3):
         if sha256(final) == sha:
             print(f"already there: {name}")
             return
-        os.remove(final)
+        aside = final + ".mismatch"  # never delete a file someone may have put there
+        os.replace(final, aside)
+        print(f"{final} is not the expected file; it is now {aside}. If it is your own copy of "
+              "Qwen3-4B-Base, delete the download and set HUMANIZE_BASE_MODEL to that file.")
     partial = final + ".part"
     expected = 0  # the full size, as the server last reported it
     for attempt in range(1, tries + 1):
@@ -112,10 +120,75 @@ def download(name, url, sha, tries=3):
     os.replace(partial, final)
 
 
-def bytes_missing(folder):
+GGUF_TYPES = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",
+              10: "<Q", 11: "<q", 12: "<d"}
+WANTED = ("general.architecture", "general.name", "general.basename", "general.finetune",
+          "general.size_label", "qwen3.embedding_length", "qwen3.block_count")
+
+
+def gguf_info(path):
+    """A few header values of a GGUF file (architecture, name, size), read without loading
+    the model: enough to tell Qwen3-4B-Base from another model."""
+    info = {}
+    with open(path, "rb") as fh:
+        if fh.read(4) != b"GGUF":
+            raise ValueError("not a GGUF file")
+        version, _tensors, count = struct.unpack("<IQQ", fh.read(20))
+        if version < 2:
+            raise ValueError(f"GGUF version {version} is too old")
+
+        def string():
+            n = struct.unpack("<Q", fh.read(8))[0]
+            return fh.read(n).decode("utf-8", "replace")
+
+        def value(kind):
+            if kind == 8:
+                return string()
+            if kind == 9:  # an array: skipped, it is the tokenizer's
+                sub, n = struct.unpack("<IQ", fh.read(12))
+                for _ in range(n):
+                    value(sub)
+                return None
+            fmt = GGUF_TYPES[kind]
+            return struct.unpack(fmt, fh.read(struct.calcsize(fmt)))[0]
+
+        for _ in range(count):
+            key = string()
+            v = value(struct.unpack("<I", fh.read(4))[0])
+            if key in WANTED:
+                info[key] = v
+                if all(k in info for k in WANTED[:2] + WANTED[5:6]):
+                    break
+    return info
+
+
+def check_base(path):
+    """(problem, warning) about a base model the user brings: the adapter needs Qwen3-4B,
+    and the method needs the base model, not the chat one."""
+    try:
+        info = gguf_info(path)
+    except (OSError, ValueError, struct.error, KeyError) as e:
+        return f"{path} could not be read as a GGUF model ({e})", None
+    arch, width = info.get("general.architecture"), info.get("qwen3.embedding_length")
+    if arch != "qwen3" or (width and width != 2560):
+        return (f"{path} is {arch or 'an unknown architecture'}"
+                + (f" with width {width}" if width else "")
+                + "; the HIP adapter needs Qwen3-4B (qwen3, width 2560)."), None
+    label = " ".join(str(info.get(k, "")) for k in ("general.name", "general.basename",
+                                                     "general.finetune")).lower()
+    if "base" not in label:
+        return None, (f"{path} calls itself «{info.get('general.name', '?')}», not a base model. "
+                      "If it is Qwen3-4B, the chat model, detectors will see its chat training: "
+                      "the method needs Qwen3-4B-Base.")
+    return None, None
+
+
+def bytes_missing(folder, own_base=False):
     """What is left to download, counting what a cut download already saved."""
     need = 0
     for name, size in SIZES.items():
+        if own_base and name == rewrite.BASE:
+            continue
         final = os.path.join(folder, name)
         if not os.path.isfile(final):
             part = final + ".part"
@@ -147,17 +220,29 @@ def main():
         print("ERROR: llama.cpp is missing. " + rewrite.HOW_TO_INSTALL_LLAMA)
         return 1
     os.makedirs(rewrite.MODEL_DIR, exist_ok=True)
-    need, free = bytes_missing(rewrite.MODEL_DIR), shutil.disk_usage(rewrite.MODEL_DIR).free
+    own = os.environ.get("HUMANIZE_BASE_MODEL")
+    if own:
+        if not os.path.isfile(own):
+            print(f"ERROR: HUMANIZE_BASE_MODEL is {own}, and there is no file there.")
+            return 1
+        problem, warning = check_base(own)
+        if problem:
+            print(f"ERROR: {problem}")
+            return 1
+        print(f"Your base model: {own}" + (f"\nWARNING: {warning}" if warning else ""))
+    need = bytes_missing(rewrite.MODEL_DIR, own_base=bool(own))
+    free = shutil.disk_usage(rewrite.MODEL_DIR).free
     if need > free:
         print(f"ERROR: the model needs {need / 1e9:.1f} GB more and {rewrite.MODEL_DIR} has "
               f"{free / 1e9:.1f} GB free. Free some space, or set HUMANIZE_MODEL_DIR to a "
               "folder on another disk.")
         return 1
     download(rewrite.ADAPTER, ADAPTER_URL, ADAPTER_SHA)
-    download(rewrite.BASE, BASE_URL, BASE_SHA)
+    if not own:
+        download(rewrite.BASE, BASE_URL, BASE_SHA)
     print(f"\nReady: {rewrite.MODEL_DIR}")
-    for f in (rewrite.ADAPTER, rewrite.BASE):
-        print(f"  {f}  {os.path.getsize(os.path.join(rewrite.MODEL_DIR, f)) / 1e9:.2f} GB")
+    for path in (os.path.join(rewrite.MODEL_DIR, rewrite.ADAPTER), rewrite.base_model_path()):
+        print(f"  {path}  {os.path.getsize(path) / 1e9:.2f} GB")
     print(f"  llama.cpp: {rewrite.llama_binary()}")
     return 0 if args.no_test else smoke_test()
 

@@ -1537,6 +1537,112 @@ class Installer(unittest.TestCase):
                 self.assertEqual(fh.read(), data)
         self.assertEqual(seen, [None, f"bytes={2 << 20}-"])
 
+    @staticmethod
+    def _gguf(path, kvs):
+        """A GGUF header with these (key, type, value) pairs and no tensors."""
+        import struct
+
+        def string(t):
+            b = t.encode("utf-8")
+            return struct.pack("<Q", len(b)) + b
+        out = b"GGUF" + struct.pack("<IQQ", 3, 0, len(kvs))
+        for key, kind, value in kvs:
+            out += string(key) + struct.pack("<I", kind)
+            if kind == 8:
+                out += string(value)
+            elif kind == 4:
+                out += struct.pack("<I", value)
+            elif kind == 9:  # an array of strings, like the tokenizer's
+                out += struct.pack("<IQ", 8, len(value)) + b"".join(string(v) for v in value)
+        with open(path, "wb") as fh:
+            fh.write(out)
+
+    def test_a_base_model_of_your_own_is_checked_by_its_header(self):
+        import install_model
+        with tempfile.TemporaryDirectory() as tmp:
+            good, chat, other = (os.path.join(tmp, n) for n in ("b.gguf", "c.gguf", "o.gguf"))
+            self._gguf(good, [("general.architecture", 8, "qwen3"),
+                              ("tokenizer.ggml.tokens", 9, ["a", "b", "c"]),
+                              ("general.name", 8, "Qwen3 4B Base"), ("qwen3.embedding_length", 4, 2560)])
+            self._gguf(chat, [("general.architecture", 8, "qwen3"), ("general.name", 8, "Qwen3 4B"),
+                              ("qwen3.embedding_length", 4, 2560)])
+            self._gguf(other, [("general.architecture", 8, "llama"), ("general.name", 8, "Llama 3 8B"),
+                               ("llama.embedding_length", 4, 4096)])
+            self.assertEqual(install_model.gguf_info(good)["general.name"], "Qwen3 4B Base")
+            self.assertEqual(install_model.check_base(good), (None, None))
+            problem, warning = install_model.check_base(chat)
+            self.assertIsNone(problem)
+            self.assertIn("not a base model", warning)
+            self.assertIn("needs Qwen3-4B", install_model.check_base(other)[0])
+            with open(os.path.join(tmp, "junk.gguf"), "wb") as fh:
+                fh.write(b"not a model")
+            self.assertIn("could not be read", install_model.check_base(os.path.join(tmp, "junk.gguf"))[0])
+            env = dict(os.environ, HUMANIZE_BASE_MODEL=other, HUMANIZE_MODEL_DIR=tmp,
+                       HUMANIZE_LLAMA=sys.executable)
+            r = run(sys.executable, script("install_model.py"), "--no-test", env=env)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("needs Qwen3-4B", r.stdout)
+            self.assertEqual(install_model.bytes_missing(tmp, own_base=True),
+                             install_model.SIZES[rewrite.ADAPTER])
+
+    def test_rewrite_uses_the_base_model_you_point_to(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, rewrite.ADAPTER), "w").close()  # no Qwen3-4B-Base.Q8_0.gguf here
+            own = os.path.join(tmp, "my-qwen3-4b-base-q4.gguf")
+            open(own, "w").close()
+            log = os.path.join(tmp, "m.txt")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nargs = sys.argv[1:]\n"
+                         f"open({log!r}, 'w').write(args[args.index('-m') + 1])\n"
+                         "sys.stdout.write(' bla bla bla bla bla bla bla bla.\\n</target_text>')\n")
+            src = os.path.join(tmp, "in.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Remote teams meet in person on fewer days than they did before now.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake, HUMANIZE_BASE_MODEL=own)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", os.path.join(tmp, "o.txt"),
+                    "--tries", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(read(log), own)
+
+    def test_a_file_that_does_not_match_is_set_aside_not_deleted(self):
+        import contextlib
+        import hashlib
+        import http.server
+        import io
+        import threading
+        import install_model
+        data = b"the real file" * 100
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with tempfile.TemporaryDirectory() as tmp:
+            mine = os.path.join(tmp, "model.gguf")
+            with open(mine, "wb") as fh:
+                fh.write(b"someone's own model")
+            old = install_model.rewrite.MODEL_DIR
+            install_model.rewrite.MODEL_DIR = tmp
+            try:
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    install_model.download("model.gguf", f"http://127.0.0.1:{server.server_port}/m",
+                                           hashlib.sha256(data).hexdigest())
+            finally:
+                install_model.rewrite.MODEL_DIR = old
+            self.assertEqual(read(mine + ".mismatch"), "someone's own model")
+            self.assertIn("HUMANIZE_BASE_MODEL", out.getvalue())
+
     def test_model_installer_has_hashes(self):
         s = read(script("install_model.py"))
         self.assertEqual(len(re.findall(r'_SHA = "[0-9a-f]{64}"', s)), 2)

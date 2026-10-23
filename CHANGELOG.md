@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.2.0 — October 23, 2026
+
+**Bring your own Qwen3-4B-Base.**
+
+- `HUMANIZE_BASE_MODEL` points the base-model pipeline at a `.gguf` of Qwen3-4B-Base you
+  already have, in any quantization (the HIP adapter fits them all). `install_model.py` then
+  downloads only the 280 MB adapter, reads the file's GGUF header without loading it, and
+  refuses a model that is not Qwen3-4B (architecture qwen3, width 2560); it warns when the
+  file calls itself Qwen3-4B without «Base», the chat model the method avoids.
+- `install_model.py` no longer deletes a model file that does not match its checksum: it
+  sets it aside as `….mismatch` and says how to use it as your own base model.
+
 ## 4.1.0 — October 23, 2026
 
 **Two pipelines, the user chooses.** The skill's default is now the **Claude pipeline**:

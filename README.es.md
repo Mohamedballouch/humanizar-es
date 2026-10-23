@@ -220,6 +220,20 @@ Necesitas Python 3.9+ (sin paquetes extra) y [llama.cpp](https://github.com/ggml
 | El modelo | `python3 scripts/install_model.py` | `python scripts\install_model.py` |
 
 El instalador verifica cada archivo con su sha256 y continúa si la descarga se corta.
+
+**¿Ya tienes Qwen3-4B-Base?** Indícale dónde está y solo se descarga el adaptador de 280 MB.
+Sirve cualquier `.gguf` de Qwen3-4B-Base (Q8_0, Q4_K_M, F16…); el instalador lee su cabecera,
+rechaza otro modelo y avisa si es Qwen3-4B, el modelo de chat:
+
+```bash
+echo 'export HUMANIZE_BASE_MODEL=/ruta/a/Qwen3-4B-Base.gguf' >> ~/.bashrc && source ~/.bashrc
+python3 scripts/install_model.py
+```
+
+En formato de Hugging Face (una carpeta de `.safetensors`), conviértelo antes con llama.cpp:
+`python3 ~/llama.cpp/convert_hf_to_gguf.py /ruta/a/Qwen3-4B-Base --outtype q8_0 --outfile
+Qwen3-4B-Base.Q8_0.gguf` (tras `pip install -r ~/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt`).
+
 Corre en CPU: bastan 8 GB de RAM libre, sin GPU. En una Mac M4 tarda de 30 a 60 segundos
 por párrafo; en una PC de hace unos años, de 1 a 3 minutos.
 
@@ -368,7 +382,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 117 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 120 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -421,7 +435,7 @@ humanizar-es/
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   117 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   120 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,
