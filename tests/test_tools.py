@@ -1605,6 +1605,55 @@ class Installer(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(read(log), own)
 
+    def test_the_cpu_unless_you_ask_for_the_gpu(self):
+        cpu = ["-ngl", "0", "-dev", "none"]
+        self.assertEqual(rewrite.device_args({}), cpu)
+        for off in ("", "0", "no", "off"):
+            self.assertEqual(rewrite.device_args({"HUMANIZE_GPU": off}), cpu, off)
+        for on in ("1", "yes", "ON", "all"):
+            self.assertEqual(rewrite.device_args({"HUMANIZE_GPU": on}), ["-ngl", "99"], on)
+        self.assertEqual(rewrite.device_args({"HUMANIZE_GPU": "20"}), ["-ngl", "20"])
+
+    def test_rewrite_passes_the_device_to_llama_cpp(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            log = os.path.join(tmp, "args.txt")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\n"
+                         f"open({log!r}, 'w').write(' '.join(sys.argv[1:]) + ' ')\n"
+                         "sys.stdout.write(' bla bla bla bla bla bla bla bla.\\n</target_text>')\n")
+            src = os.path.join(tmp, "in.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Remote teams meet in person on fewer days than they did before now.\n")
+            for gpu, used, unused in (("1", " -ngl 99 ", " -dev "), ("", " -ngl 0 -dev none ", " -ngl 99 ")):
+                env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake, HUMANIZE_GPU=gpu)
+                r = run(sys.executable, script("rewrite.py"), src, "-o", os.path.join(tmp, "o.txt"),
+                        "--tries", "1", env=env)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertIn(used, read(log))
+                self.assertNotIn(unused, read(log))
+
+    def test_the_installer_reads_the_gpus_llama_cpp_sees(self):
+        import install_model
+        from unittest import mock
+        gpu = "CUDA0: NVIDIA GeForce RTX 3060 (12045 MiB, 11500 MiB free)"
+        cases = {
+            "gpu": (f"print('Available devices:')\nprint('  {gpu}')\n", [gpu]),
+            "cpu": ("print('Available devices:')\nprint('  (none)')\n", []),  # llama.cpp's own
+            "bare": ("print('Available devices:')\n", []),
+            "old": ("import sys\nsys.stderr.write('error: invalid argument: --list-devices\\n')\n"
+                    "sys.exit(1)\n", None),
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, (code, expected) in cases.items():
+                fake = os.path.join(tmp, name + ".py")
+                with open(fake, "w", encoding="utf-8") as fh:
+                    fh.write("import sys\nsys.stderr.write('load_backend: loaded CPU backend\\n')\n" + code)
+                with mock.patch.dict(os.environ, {"HUMANIZE_LLAMA": fake}):
+                    self.assertEqual(install_model.gpu_devices(), expected, name)
+
     def test_a_file_that_does_not_match_is_set_aside_not_deleted(self):
         import contextlib
         import hashlib

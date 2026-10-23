@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Rewrite with a local BASE model (HIP), no API and no GPU.
+"""Rewrite with a local BASE model (HIP), no API; on the CPU unless HUMANIZE_GPU is set.
 
 Detectors mostly recognize the fingerprint of chat training: text from a base model
 (without that training) looks human to them. HIP is Qwen3-4B-Base with a LoRA
@@ -31,7 +31,9 @@ and inside a paragraph the model sees placeholders for math, citations, referenc
 every other command (scripts/latex.py). A try that loses, repeats or adds a placeholder is
 not used, so $\\beta$, \\cite{…} or \\ref{…} cannot change.
 
-Runs on CPU (-ngl 0) at low priority. About 30 s per paragraph on an M4 Mac.
+Runs on CPU (-ngl 0) at low priority. About 30 s per paragraph on an M4 Mac, 1-3 min on
+an older PC. HUMANIZE_GPU=1 puts the model on the GPU (a llama.cpp built for it, ~5 GB of
+free GPU memory); HUMANIZE_GPU=20 puts only 20 of its 36 layers there.
 Install first: python3 scripts/install_model.py  (about 4.6 GB in ~/.cache/humanizar-es/hip)
 
 usage:
@@ -90,6 +92,19 @@ def base_model_path(environ=None):
     quantization: the HIP adapter fits them all), or Qwen3-4B-Base.Q8_0.gguf in MODEL_DIR."""
     environ = os.environ if environ is None else environ
     return environ.get("HUMANIZE_BASE_MODEL") or os.path.join(MODEL_DIR, BASE)
+
+
+def device_args(environ=None):
+    """Where llama.cpp runs the model. The CPU by default: on a Mac the GPU froze the screen
+    while the model ran. HUMANIZE_GPU=1 (or yes, on, all) puts every layer on the GPU;
+    a number from 2 up puts that many of the 36 there, for a GPU with less than ~5 GB free."""
+    environ = os.environ if environ is None else environ
+    gpu = environ.get("HUMANIZE_GPU", "").strip().lower()
+    if gpu in ("1", "yes", "on", "true", "all"):
+        return ["-ngl", "99"]
+    if gpu.isdigit() and int(gpu) > 1:
+        return ["-ngl", gpu]
+    return ["-ngl", "0", "-dev", "none"]
 
 
 def build_prompt(paragraph, lead_words=2, lead=None, lang=None):
@@ -168,7 +183,7 @@ def _run_llama(prompt_file, paragraph, threads, temperature):
     generated = int(len(paragraph.split()) * 3) + 100
     cmd = [llama, "-m", base_model_path(),
            "--lora", os.path.join(MODEL_DIR, ADAPTER),
-           "-ngl", "0", "-dev", "none", "-t", str(threads),
+           *device_args(), "-t", str(threads),
            "-c", str(context_size(paragraph, generated)), "-n", str(generated),
            "--temp", str(temperature), "--top-p", "0.95",
            "-no-cnv", "--no-display-prompt", "-r", "</target_text>", "-f", prompt_file]

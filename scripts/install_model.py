@@ -20,6 +20,10 @@ resumes where it stopped. It checks the free space first. Where huggingface.co i
 blocked, HF_ENDPOINT points it to a mirror (the same variable huggingface_hub uses);
 the sha256 check still applies.
 
+It runs on the CPU. HUMANIZE_GPU=1 runs it on the GPU, and this checks that llama.cpp
+sees one: a build for the CPU alone does not (rebuild it with -DGGML_CUDA=ON for NVIDIA,
+or -DGGML_VULKAN=ON for most GPUs; a Mac build uses Metal already).
+
 Then it rewrites one short sentence, so a llama.cpp that rejects a flag or cannot load
 the model fails here, with its error, and not in the middle of a text (--no-test skips it).
 
@@ -31,6 +35,7 @@ import hashlib
 import os
 import shutil
 import struct
+import subprocess
 import sys
 import time
 import urllib.error
@@ -196,6 +201,25 @@ def bytes_missing(folder, own_base=False):
     return need
 
 
+def gpu_devices():
+    """The GPUs this llama.cpp can use («CUDA0: NVIDIA GeForce RTX 3060 (12 GB …)»), [] when
+    it was built for the CPU alone, None when it cannot say (no --list-devices)."""
+    llama = rewrite.llama_binary()
+    cmd = ([sys.executable] if llama.endswith(".py") else []) + [llama, "--list-devices"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, encoding="utf-8", errors="replace",
+                           stdin=subprocess.DEVNULL, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for out in (r.stdout, r.stderr):
+        lines = out.splitlines()
+        for i, line in enumerate(lines):
+            if line.strip() == "Available devices:":
+                return [x.strip() for x in lines[i + 1:]  # a CPU build lists «(none)»
+                        if x[:1].isspace() and x.strip() and x.strip() != "(none)"]
+    return None
+
+
 def smoke_test():
     """One short rewrite with the real model: 0 if llama.cpp runs it, 1 with its error."""
     sentence = "The small town hosts a market every Saturday morning in the main square."
@@ -244,6 +268,15 @@ def main():
     for path in (os.path.join(rewrite.MODEL_DIR, rewrite.ADAPTER), rewrite.base_model_path()):
         print(f"  {path}  {os.path.getsize(path) / 1e9:.2f} GB")
     print(f"  llama.cpp: {rewrite.llama_binary()}")
+    found = None if rewrite.device_args()[1] == "0" else gpu_devices()
+    if rewrite.device_args()[1] == "0":
+        print("  runs on: the CPU (HUMANIZE_GPU=1 runs it on a GPU)")
+    elif found == []:
+        print("  runs on: the CPU\nWARNING: HUMANIZE_GPU is set, but this llama.cpp sees no GPU: "
+              "it was built for the CPU alone. Rebuild it with -DGGML_CUDA=ON (NVIDIA, needs the "
+              "CUDA toolkit) or -DGGML_VULKAN=ON (most GPUs).")
+    else:
+        print("  runs on: the GPU" + (f" ({'; '.join(found)})" if found else ""))
     return 0 if args.no_test else smoke_test()
 
 

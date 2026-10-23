@@ -237,6 +237,14 @@ Qwen3-4B-Base.Q8_0.gguf` (tras `pip install -r ~/llama.cpp/requirements/requirem
 Corre en CPU: bastan 8 GB de RAM libre, sin GPU. En una Mac M4 tarda de 30 a 60 segundos
 por párrafo; en una PC de hace unos años, de 1 a 3 minutos.
 
+**¿Tienes GPU?** `export HUMANIZE_GPU=1` corre el modelo en ella, mucho más rápido. Necesita
+unos 5 GB de memoria de GPU libre (`HUMANIZE_GPU=20` pone solo 20 de las 36 capas del
+modelo) y un llama.cpp compilado para la GPU: `-DGGML_CUDA=ON` para NVIDIA (con el CUDA
+toolkit) o `-DGGML_VULKAN=ON` para la mayoría de las GPU, añadido al `cmake -S . -B build`
+de llama.cpp; el llama.cpp de brew en una Mac ya usa Metal. Después, `install_model.py` dice
+si llama.cpp ve la GPU. Viene apagado porque en una Mac la GPU trababa la pantalla mientras
+corría el modelo. Es el mismo modelo en los dos casos; las mediciones se hicieron en CPU.
+
 ---
 
 ## Úsalo a mano
@@ -382,7 +390,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 120 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 123 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -390,7 +398,8 @@ La herramienta nunca lo hace. Medir es tu paso, en tu detector, como con cualqui
 revises.
 
 **¿Necesito GPU?**
-No. Corre en CPU, con prioridad baja, así que tu computadora sigue usable.
+No. Corre en CPU, con prioridad baja, así que tu computadora sigue usable. Si tienes una,
+`HUMANIZE_GPU=1` la usa (ver *El modelo*).
 
 ---
 
@@ -435,7 +444,7 @@ humanizar-es/
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   120 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   123 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,
