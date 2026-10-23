@@ -1,5 +1,15 @@
 # Changelog
 
+## 4.3.0 — October 23, 2026
+
+**The GPU, on request.**
+
+- `HUMANIZE_GPU=1` runs the base model on the GPU (`-ngl 99`), much faster than the CPU;
+  a number from 2 up puts only that many of its 36 layers there, for a GPU with less than
+  ~5 GB free. The CPU stays the default: on a Mac the GPU froze the screen.
+- `install_model.py` says where the model runs and, with `HUMANIZE_GPU`, asks llama.cpp
+  which GPUs it sees (`--list-devices`), warning when it was built for the CPU alone.
+
 ## 4.2.0 — October 23, 2026
 
 **Bring your own Qwen3-4B-Base.**

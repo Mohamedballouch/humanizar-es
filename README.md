@@ -237,6 +237,14 @@ Qwen3-4B-Base.Q8_0.gguf` (after `pip install -r ~/llama.cpp/requirements/require
 It runs on CPU: 8 GB of free RAM is enough, no GPU. On an M4 Mac it takes about 30–60
 seconds per paragraph; on a few-years-old PC, 1 to 3 minutes.
 
+**Have a GPU?** `export HUMANIZE_GPU=1` runs the model on it, which is much faster. It needs
+about 5 GB of free GPU memory (`HUMANIZE_GPU=20` puts only 20 of the model's 36 layers
+there) and a llama.cpp built for the GPU: `-DGGML_CUDA=ON` for NVIDIA (with the CUDA
+toolkit) or `-DGGML_VULKAN=ON` for most GPUs, added to llama.cpp's `cmake -S . -B build`;
+brew's llama.cpp on a Mac uses Metal already. `install_model.py` then says whether
+llama.cpp sees the GPU. It is off by default because on a Mac the GPU froze the screen
+while the model ran. It is the same model either way; the measurements were made on CPU.
+
 ---
 
 ## Use it by hand
@@ -381,14 +389,15 @@ No. It changes who wrote the sentences and their rhythm, not the spelling.
 Three of four essays reached 0% in Grammarly, and the latest one passes Grammarly, GPTZero
 and ZeroGPT at once. The pieces that can be deterministic are (the joining is seeded;
 ZeroGPT gives the same score for the same text), output that copies the original is
-refused, and 120 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
+refused, and 123 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
 over time, which is why every session carries controls.
 
 **Does the selection step send my text anywhere?**
 The tool never does. Measuring is your step, in your detector, as with any text you check.
 
 **Do I need a GPU?**
-No. It runs on CPU, at low priority, so your computer stays usable.
+No. It runs on CPU, at low priority, so your computer stays usable. If you have one,
+`HUMANIZE_GPU=1` uses it (see *The model*).
 
 ---
 
@@ -433,7 +442,7 @@ humanizar-es/
 │   └── join.py              stage 3: rebuild the rhythm of each paragraph
 ├── examples/                worked examples in Spanish and English
 ├── references/              every measurement, and how to measure
-└── tests/                   120 tests on Ubuntu, macOS and Windows (no network, no model)
+└── tests/                   123 tests on Ubuntu, macOS and Windows (no network, no model)
 ```
 
 The old script names (`hip.py`, `unir.py`, `verificar_fidelidad.py`, `instalar_hip.py`)
