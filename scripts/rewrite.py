@@ -173,14 +173,28 @@ def _run_llama(prompt_file, paragraph, threads, temperature):
     return r.stdout
 
 
+PERCENT_WORDS = re.compile(r"\s+(?:percent|per\s+cent|por\s+ciento|porciento)\b", re.I)
+
+
 def restore_percent_signs(original, rewritten):
     """The HIP adapter eats the % sign: «60%» comes out as «60». If the original had
-    that number with %, it is given back. Numbers the original did not have with %
-    are left alone."""
+    that number with %, it is given back, to the occurrence that is that figure: not to
+    «60 percent» (the sign is in words) nor to «the 5 years» when the original also says
+    «5 years». Numbers the original did not have with % are left alone."""
     for n in set(re.findall(r"(\d+(?:[.,]\d+)?)\s?%", original)):
-        if not re.search(rf"(?<![\d.,]){re.escape(n)}\s?%", rewritten):
-            rewritten = re.sub(rf"(?<![\d.,]){re.escape(n)}(?![\d.,]*\d)(?!\s?%)",
-                               n + "%", rewritten, count=1)
+        num = rf"(?<![\d.,]){re.escape(n)}"
+        if re.search(num + r"\s?%", rewritten):
+            continue
+        other = {w.lower() for w in re.findall(num + r"\s+(\w+)", original)}
+        for m in re.finditer(num + r"(?![\d.,]*\d)(?!\s?%)", rewritten):
+            after = rewritten[m.end():]
+            if PERCENT_WORDS.match(after):
+                break
+            word = re.match(r"\s+(\w+)", after)
+            if word and word.group(1).lower() in other:
+                continue
+            rewritten = rewritten[:m.start()] + n + "%" + rewritten[m.end():]
+            break
     return rewritten
 
 
@@ -202,7 +216,7 @@ def copied_share(original, rewritten, run=COPY_RUN):
     return sum(m.size for m in sm.get_matching_blocks() if m.size >= run) / max(1, len(b))
 
 
-QUOTE = re.compile(r'["“«]([^"”»]{12,})["”»]')
+QUOTE = re.compile(r'"([^"\n]{0,800})"|“([^”\n]{0,800})”|«([^»\n]{0,800})»')
 PARENTHESES = re.compile(r"\(([^()]*)\)")
 ROMAN = re.compile(r"c{0,3}(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})", re.I)
 
@@ -220,23 +234,40 @@ def references(text):
     return found
 
 
+def quotations(text):
+    """Quoted passages of 12+ characters, paired in order: in «called it "naive" while
+    others said "bold"» there are two short quotes, not one long one between them."""
+    found = []
+    for m in QUOTE.finditer(text):
+        q = next(g for g in m.groups() if g is not None)
+        if len(q) >= 12:
+            found.append(q)
+    return found
+
+
 def citation_problem(original, rewritten):
     """A quotation of the original that is no longer verbatim, or a reference in
-    brackets the original never had («(De Anima, libro i, cap. vi)»). HIP did both on a
-    test essay; a changed quote or an invented source is worse than any detector score."""
-    norm = lambda s: " ".join(s.lower().split()).strip(" .,;:")  # noqa: E731
+    brackets that brings a number, a numeral or a name the original never had
+    («(De Anima, libro i, cap. vi)»). HIP did both on a test essay; a changed quote or an
+    invented source is worse than any detector score. A bracket the try only rewords
+    («(from 5% to 30% within two years)») is not a new reference."""
+    norm = lambda s: " ".join(s.replace("’", "'").replace("‘", "'").lower().split()).strip(" .,;:")  # noqa: E731
     have = norm(rewritten)
-    for q in QUOTE.findall(original):
+    for q in quotations(original):
         if norm(q) not in have:
             return "(quote changed)"
-    known = {norm(r) for r in references(original)}
+    words = re.findall(r"\w+", original)
+    lower = {w.lower() for w in words}
     for r in references(rewritten):
-        if norm(r) not in known:
-            return "(invented reference)"
+        for w in re.findall(r"\w+", r):
+            numeral = w.isdigit() or (ROMAN.fullmatch(w) and (len(w) > 1 or "," in r))
+            if (numeral and w.lower() not in lower) or (
+                    not numeral and w[:1].isupper() and len(w) >= 3 and w not in words):
+                return "(invented reference)"
     return None
 
 
-URL = re.compile(r"(?:https?://|www\.)[^\s<>()\[\]]+")
+URL = re.compile(r"(?:https?://|www\.)[^\s<>()\[\]\"«»“”'’]+")
 LINK_TARGET = re.compile(r"\]\(([^)\s]+)\)")
 INLINE_CODE = re.compile(r"`[^`\n]+`")
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -286,6 +317,12 @@ def acceptable(p, r, wanted, concepts, max_copied, max_tells=None, lang="en"):
 is_title = tells.is_title
 
 
+def short_item(text):
+    """A list item too short to rewrite («Fast setup»). Longer bullets are rewritten even
+    without a final period: most AI bullets are fragments of 6 to 12 words."""
+    return len(text.split()) <= 5
+
+
 def main():
     ap = argparse.ArgumentParser(description="Rewrite with a local base model (HIP), paragraph by paragraph.")
     ap.add_argument("original")
@@ -333,7 +370,7 @@ def main():
                   file=sys.stderr)
             return 2
 
-    with open(args.original, encoding="utf-8") as fh:
+    with open(args.original, encoding="utf-8-sig") as fh:
         text = fh.read()
     concepts = check.load_concepts(args.concepts) if args.concepts else []
     paragraphs = blocks.split(text)
@@ -346,7 +383,7 @@ def main():
         if not os.path.isfile(args.output):
             print(f"ERROR: --only needs the existing {args.output}", file=sys.stderr)
             return 2
-        with open(args.output, encoding="utf-8") as fh:
+        with open(args.output, encoding="utf-8-sig") as fh:
             kept = blocks.split(fh.read())
         if len(kept) != len(paragraphs):
             print(f"ERROR: {args.output} has {len(kept)} paragraphs and the original "
@@ -422,7 +459,7 @@ def rewrite_block(i, p, args, concepts, lang, report):
     if k == "list":
         pairs, done = [], 0
         for j, (marker, item) in enumerate(blocks.items(p), 1):
-            if is_title(item):
+            if short_item(item):
                 pairs.append((marker, item))
                 continue
             text, _, fallback, lost = rewrite_unit(item, args, concepts, lang)
@@ -480,7 +517,7 @@ def run_paragraphs(args, paragraphs, kept, only, concepts, lang):
     for n, x in enumerate(output, 1):
         if (only is None or n in only) and blocks.prose_of(x) and not is_title(x):
             hits = tells.find(blocks.prose_of(x), lang)
-            if sum(w for _, w, _ in hits) >= tells.STRONG:
+            if tells.flagged(hits):
                 strong.append(f"{n} ({tells.summary(hits)})")
     if strong:
         print("AI tells left (scripts/tells.py shows them all; regenerate, don't fix by hand): "
@@ -497,7 +534,7 @@ def one_candidate(p, args, concepts, lang):
     if blocks.kind(p) == "list":
         pairs = []
         for marker, item in blocks.items(p):
-            if not is_title(item):
+            if not short_item(item):
                 text, _, fallback, _ = rewrite_unit(item, args, concepts, lang)
                 if text == item or fallback:
                     return None
@@ -549,9 +586,9 @@ def take(original, output, spec):
     if not n.isdigit() or not os.path.isfile(path):
         print("ERROR: --take needs N=FILE with an existing FILE", file=sys.stderr)
         return 2
-    with open(output, encoding="utf-8") as fh:
+    with open(output, encoding="utf-8-sig") as fh:
         paragraphs = blocks.split(fh.read())
-    with open(original, encoding="utf-8") as fh:
+    with open(original, encoding="utf-8-sig") as fh:
         count = len(blocks.split(fh.read()))
     if count != len(paragraphs):
         print(f"ERROR: {output} has {len(paragraphs)} paragraphs and the original {count}; "
@@ -560,7 +597,7 @@ def take(original, output, spec):
     if not 1 <= int(n) <= len(paragraphs):
         print(f"ERROR: {output} has {len(paragraphs)} paragraphs", file=sys.stderr)
         return 2
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig") as fh:
         new = fh.read().strip()
     # a list keeps its lines; a paragraph is one line, as rewrite.py writes it
     paragraphs[int(n) - 1] = new if blocks.kind(new) == "list" else " ".join(new.split())

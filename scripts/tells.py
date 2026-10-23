@@ -49,12 +49,14 @@ PATTERNS = {
     "en": [
         # Leftovers from the chat: never part of the text.
         ("chat residue", 3, r"\b(?:i hope this helps|great question|you're absolutely right|"
-         r"certainly!|of course!|let me know if|feel free to|would you like me to|"
-         r"i'd be happy to|here is (?:an?|the) (?:overview|summary|breakdown|rewrite))"),
+         r"certainly!|of course!|would you like me to|i'd be happy to|"
+         r"here is (?:an?|the) (?:overview|summary|breakdown|rewrite))"),
+        # ordinary in an e-mail, a chat leftover at the end of an essay: weak alone
+        ("chat-style offer", 1, r"\b(?:let me know if|feel free to)\b"),
         ("knowledge-limit disclaimer", 3, r"\b(?:as of my (?:last|latest) (?:training|update|"
          r"knowledge)|up to my last training|while specific details (?:are|remain) (?:limited|"
-         r"scarce)|based on (?:the )?available information|not (?:widely|publicly|extensively) "
-         r"(?:documented|available|disclosed))"),
+         r"scarce)|based on (?:the )?available information|not (?:widely|extensively) "
+         r"documented in (?:the )?(?:readily )?available sources)"),
         # Staging instead of stating.
         ("not X but Y", 3, r"\bnot (?:just|only|merely|simply)\b[^.;:!?]{1,90}?\bbut\b|"
          r"\b(?:it|this|that)(?:'s| is) not (?:just |only |merely )?(?:about )?[^.;:!?,]{1,50}"
@@ -86,14 +88,16 @@ PATTERNS = {
          r"to sum up,|all in all,)"),
         # Words models use far more than people.
         ("AI word", 2, _words(
-            r"delv(?:e|es|ed|ing)", r"tapestr(?:y|ies)", r"testament", r"pivotal", r"crucial(?:ly)?",
+            r"delv(?:e|es|ed|ing)", r"tapestr(?:y|ies)", r"(?<!old )(?<!new )testament",
+            r"pivotal", r"crucial(?:ly)?",
             r"underscor(?:e|es|ed|ing)", r"showcas(?:e|es|ed|ing)", r"vibrant", r"intricate",
             r"intricac(?:y|ies)", r"meticulous(?:ly)?", r"garner(?:s|ed|ing)?",
             r"bolster(?:s|ed|ing)?", r"interplay", r"enduring", r"landscapes?",
             r"seamless(?:ly)?", r"multifaceted", r"holistic", r"transformative", r"paramount",
             r"realm", r"furthermore", r"moreover", r"additionally", r"notably",
-            r"foster(?:s|ed|ing)?", r"leverag(?:e|es|ed|ing)", r"streamlin(?:e|es|ed|ing)",
-            r"robust", r"nuanced", r"commendable", r"embark(?:s|ed|ing)?", r"unwavering",
+            r"foster(?:s|ed|ing)?(?! (?:care|parents?|homes?|child|children|famil))",
+            r"leverag(?:e|es|ed|ing)", r"streamlin(?:e|es|ed|ing)",
+            r"robust(?! (?:standard errors?|regression|estimat|statistic|to\b))", r"nuanced", r"commendable", r"embark(?:s|ed|ing)?", r"unwavering",
             r"align(?:s|ed)? with", r"enhanc(?:e|es|ed|ing)", r"invaluable", r"ever-evolving",
             r"forward-thinking", r"cutting-edge", r"groundbreaking")),
         # Weak alone.
@@ -108,13 +112,14 @@ PATTERNS = {
          r"some|various) (?:studies|experts|reports)|observers have (?:noted|cited))\b"),
         ("stacked hedge", 1, r"\b(?:could potentially|may potentially|might arguably|"
          r"it could be argued|it's also possible that)\b"),
-        ("triad", 1, r"\b[\w-]+(?: [\w-]+){0,2}, [\w-]+(?: [\w-]+){0,2}, (?:and|or) [\w-]+"),
+        ("triad", 1, r"\b\w[\w-]{0,30}(?: \w[\w-]{0,30}){0,2}, \w[\w-]{0,30}(?: \w[\w-]{0,30}){0,2}, "
+         r"(?:and|or) \w"),
         ("dash", 1, r"—|(?<!\d)\s–\s|\s--\s"),
     ],
     "es": [
         ("restos del chat", 3, r"(?:espero que (?:esto|te) (?:ayude|sirva)|¡claro!|¡por supuesto!|"
-         r"excelente pregunta|si quieres,? puedo|no dudes en|aqui tienes (?:un|una|el|la) "
-         r"(?:resumen|version|texto))"),
+         r"excelente pregunta|aqui tienes (?:un|una|el|la) (?:resumen|version|texto))"),
+        ("oferta de chat", 1, r"(?:si quieres,? puedo|no dudes en)"),
         ("limite de conocimiento", 3, r"(?:hasta (?:mi|la fecha de mi) ultima actualizacion|"
          r"segun la informacion disponible|no (?:esta|estan) ampliamente documentad)"),
         ("relevancia inflada", 3, r"\b(?:(?:juega|juegan|desempena|desempenan) un papel "
@@ -130,8 +135,9 @@ PATTERNS = {
         ("palabra de IA", 2, _words(
             r"profundiz(?:ar|amos|a) en", r"adentr(?:arnos|arse)", r"sumerg(?:irnos|irse)",
             r"crucial(?:es)?", r"intrincad[oa]s?", r"meticulos(?:o|a|os|as|amente)",
-            r"vibrantes?", r"multifaceticos?", r"holistic[oa]s?", r"transformador(?:a|es)?",
-            r"potenci(?:ar|ando)", r"fomentar")),
+            r"vibrantes?", r"multifaceticos?", r"holistic[oa]s?", r"transformador(?:a|es)?")),
+        # frequent in AI Spanish, but ordinary in policy and business writing: weak alone
+        ("verbo frecuente", 1, _words(r"potenci(?:ar|ando)", r"fomentar")),
         ("gerundio colgado", 1, r", (?:destacando|subrayando|resaltando|enfatizando|reflejando|"
          r"simbolizando|contribuyendo a|fomentando|garantizando|asegurando)\b"),
         ("raya", 1, r"(?<=\w)\s?—\s?(?=\w)|\s–\s"),
@@ -151,8 +157,16 @@ STOCK_OPENINGS = {
            "en resumen,", "en definitiva,", "en la actualidad,", "hoy en dia,", "cabe destacar",
            "es importante", "en el mundo actual", "en un mundo"),
 }
-STRONG = 3  # a paragraph at or above this score is worth regenerating
-QUOTED = re.compile(r'"[^"\n]{3,}?"|“[^”\n]{3,}?”|«[^»\n]{3,}?»')
+STRONG = 3  # weight of a tell that is worth regenerating on one sighting
+
+
+def flagged(hits):
+    """Worth regenerating: one strong tell, two stock words or phrases together («Ultimately,
+    … one-size-fits-all»), or a score of 6 from weaker ones. A single stock word, a dash
+    or a list of three is ordinary in human prose."""
+    return (any(w >= STRONG for _, w, _ in hits) or sum(w == 2 for _, w, _ in hits) >= 2
+            or sum(w for _, w, _ in hits) >= 6)
+QUOTED = re.compile(r'"[^"\n]{3,500}"|“[^”\n]{3,500}”|«[^»\n]{3,500}»')
 
 
 def _prepare(text):
@@ -166,8 +180,10 @@ def find(paragraph, lang="en"):
     t = _prepare(paragraph)
     hits = []
     for label, weight, pat in COMPILED[lang]:
-        for m in pat.finditer(t):
-            hits.append((label, weight, " ".join(m.group(0).split()) or m.group(0)))
+        found = [" ".join(m.group(0).split()) or m.group(0) for m in pat.finditer(t)]
+        if label in ("dash", "raya"):  # a pair around an aside is one; more than two is a habit
+            found = found[:min(2, (len(found) + 1) // 2)]
+        hits += [(label, weight, x) for x in found]
     start = t.lstrip()
     opening = next((o for o in STOCK_OPENINGS[lang] if start.startswith(o)), None)
     if opening:
@@ -278,7 +294,7 @@ def main():
     try:
         texts = []
         for f in args.files:
-            with open(f, encoding="utf-8") as fh:
+            with open(f, encoding="utf-8-sig") as fh:
                 texts.append(fh.read())
     except OSError as e:
         print(f"ERROR: {e}", file=sys.stderr)
@@ -301,16 +317,17 @@ def main():
     for i, s, hits in last:
         if hits:
             print(f"  ¶{i:<3} {s:>3}  {summary(hits)}")
-    flagged = [(i, s) for i, s, _ in last if s >= STRONG]
+    to_redo = [(i, s) for i, s, hits in last if flagged(hits)]
     total = sum(s for _, s, _ in last)
-    print(f"\n{len(last)} paragraphs, total {total}; {len(flagged)} at {STRONG} or more.")
-    if flagged:
-        only = ",".join(str(i) for i, _ in flagged)
+    print(f"\n{len(last)} paragraphs, total {total}; {len(to_redo)} to regenerate (a strong tell, "
+          "two stock words, or 6 points).")
+    if to_redo:
+        only = ",".join(str(i) for i, _ in to_redo)
         print("Don't fix them by hand: regenerate them from the original and keep the candidate\n"
               "with the fewest tells that still says everything (the rewrite before join.py):\n"
               "  python3 scripts/rewrite.py 00-original.txt -o 01-rewritten.txt "
               f"--concepts concepts.txt --only {only} --candidates 6")
-        for i, _ in flagged:
+        for i, _ in to_redo:
             lead = suggested_lead(blocks.prose_of(last_blocks[i - 1]), lang)
             if lead:
                 print(f"  ¶{i} opens with a stock connector; add --lead \"{lead}\" for that one.")

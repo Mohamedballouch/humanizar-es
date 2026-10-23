@@ -35,6 +35,7 @@ Exit code: 0 if every variant keeps 100% of the concepts, 1 if any loses one,
 2 on a usage error.
 """
 import argparse
+import collections
 import re
 import sys
 import unicodedata
@@ -79,7 +80,7 @@ def pattern(term):
 
 def load_concepts(path):
     concepts = []
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8-sig") as fh:
         for line in fh:
             line = re.split(r"(?:^|\s)#", line, maxsplit=1)[0].strip()
             if not line:
@@ -135,10 +136,13 @@ def extract_concepts(text):
 
 
 def negations(text):
-    """Normalized 'negation + next word' pairs of the text. Quotes and parentheses
-    are ignored: 'no «contradiccion»' counts as 'no contradiccion'."""
-    clean = re.sub(r"[«»\"“”‘’()\[\]]", " ", norm(text))
-    return set(
+    """Normalized 'negation + next word' pairs of the text, with how often each appears:
+    a negation lost in one sentence is not hidden by the same pair in another. Quotes and
+    parentheses are ignored ('no «contradiccion»' counts as 'no contradiccion'), and
+    English contractions count as 'not' ("doesn't apply" = "does not apply")."""
+    clean = re.sub(r"n['’]t(?!\w)", " not", norm(text))
+    clean = re.sub(r"[«»\"“”‘’()\[\]]", " ", clean)
+    return collections.Counter(
         f"{a} {b}"
         for a, b in re.findall(rf"(?<!\w)({NEGATIONS})\s+(\w+)", clean)
     )
@@ -179,7 +183,7 @@ def main():
     try:
         texts = {}
         for f in [args.original] + args.variants:
-            with open(f, encoding="utf-8") as fh:
+            with open(f, encoding="utf-8-sig") as fh:
                 texts[f] = fh.read()
         concepts = (
             load_concepts(args.concepts)
@@ -243,7 +247,7 @@ def main():
     neg_original = negations(texts[args.original])
     warnings = []
     for f in args.variants:
-        missing = sorted(neg_original - negations(texts[f]))
+        missing = sorted(neg_original - negations(texts[f]))  # counts: one lost of two shows
         if missing:
             warnings.append((f, missing))
     if warnings:

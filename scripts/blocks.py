@@ -57,9 +57,11 @@ def split(text):
 
 
 def _is_code(block):
-    lines = block.split("\n")
-    return bool(FENCE.match(lines[0])) or all(
-        ln.startswith(("    ", "\t")) for ln in lines if ln.strip())
+    """Fenced, or two or more lines all indented. A single indented line is a paragraph:
+    essays indent their first line with a tab."""
+    lines = [ln for ln in block.split("\n") if ln.strip()]
+    return bool(lines) and (bool(FENCE.match(lines[0])) or (
+        len(lines) > 1 and all(ln.startswith(("    ", "\t")) for ln in lines)))
 
 
 def kind(block):

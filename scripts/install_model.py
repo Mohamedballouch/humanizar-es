@@ -63,6 +63,7 @@ def download(name, url, sha, tries=3):
             return
         os.remove(final)
     partial = final + ".part"
+    expected = 0  # the full size, as the server last reported it
     for attempt in range(1, tries + 1):
         have = os.path.getsize(partial) if os.path.isfile(partial) else 0
         req = urllib.request.Request(url, headers={"User-Agent": "humanizar-es"})
@@ -73,6 +74,7 @@ def download(name, url, sha, tries=3):
                 if have and r.status != 206:  # the server does not resume: from scratch
                     have = 0
                 total = have + int(r.headers.get("Content-Length") or 0)
+                expected = total if total > have else expected
                 print(f"Downloading {name} ({total / 1e9:.2f} GB) ...", flush=True)
                 with open(partial, "ab" if have else "wb") as fh:
                     done, t0, last = have, time.time(), 0.0
@@ -85,6 +87,8 @@ def download(name, url, sha, tries=3):
                             pct = f"{100 * done / total:5.1f}%" if total else ""
                             print(f"\r  {pct} {done / 1e9:.2f} GB  {speed:.1f} MB/s   ",
                                   end="", flush=True)
+            if total and done < total:  # the server closed early without an error: resume
+                raise OSError(f"closed at {done / 1e9:.2f} of {total / 1e9:.2f} GB")
             print()
             break
         except urllib.error.HTTPError as e:
@@ -99,6 +103,10 @@ def download(name, url, sha, tries=3):
         sys.exit(f"ERROR: could not download {name}. Check the connection and run it again.")
     print(f"verifying {name} ...", flush=True)
     if sha256(partial) != sha:
+        size = os.path.getsize(partial)
+        if expected and size < expected:  # incomplete, not corrupted: keep it to resume
+            sys.exit(f"ERROR: {name} is incomplete ({size / 1e9:.2f} GB). Run it again: it "
+                     "resumes from there.")
         os.remove(partial)
         sys.exit(f"ERROR: {name} arrived corrupted (sha256 mismatch). Run it again.")
     os.replace(partial, final)

@@ -27,6 +27,41 @@ rewritten and joined like prose, and a list came back as one run of sentences.
 - CI runs pyflakes. The evidence's limits section was out of date (it said English was
   not measured).
 
+Fixes from an independent review, each with a test that reproduces it:
+
+- `join.py` dropped the period of initials and abbreviations and lowercased the name after
+  them: «J.R.R and tolkien», «D.C and the city», «Rev and martin», «a.m and everyone»,
+  «EE.UU y allí», «cap y VI», and «1 and open the box» in numbered steps. Now
+  dotted abbreviations, initials, more titles (Rev., Lt., Capt.…, cap., pág.) and bare step
+  numbers do not end a sentence.
+- `join.py` lowercased «Microsoft's» even with Microsoft in the concepts, and «I’m» with a
+  curly apostrophe; names that end like verbs (Italy, Boeing, Javier, Pilar) were left out
+  of the REVIEW warning.
+- `join.py --no-dashes` turned ranges (1990—2000, 1939 – 1945) and list dashes into commas.
+- `check.py` hid a lost negation when the same pair appeared elsewhere ("no es" twice, one
+  lost), and did not see English "n't".
+- `install_model.py`: a server that closed early without an error left a partial file
+  that was then called corrupted and deleted, so every retry started from zero. It now
+  resumes, and an incomplete file is kept.
+- `rewrite.py`: two short quotations made the words between them a «quote» that every
+  try failed; a curly apostrophe counted as a changed quote; any reworded bracket with a
+  number counted as an invented reference (now only a new number, numeral or name does);
+  a URL inside «» was taken with the »; «60%» became «60% percent», and a % could land
+  on the wrong 5.
+- `install.py` refused to reinstall over its own `--symlink` install.
+- `tells.py` flagged ordinary prose as strong: "not publicly disclosed", "let me know if"
+  and «no dudes en» in e-mails, two paired dashes (they were counted twice), the Old
+  Testament, foster care, robust standard errors. A paragraph is now worth regenerating
+  with one strong tell, two stock words, or 6 points.
+- A UTF-8 byte order mark (Notepad, PowerShell 5) hid the first concept and the opening of
+  the text; all scripts now read it away.
+- One indented line is a paragraph (essays indent their first line), not a code block.
+- List bullets of 6 to 12 words without a final period were kept as titles; now only
+  items of 5 words or fewer are.
+- Three patterns were quadratic on pathological input (long hyphen chains, thousands of
+  unclosed quotes); they are bounded now.
+- 93 tests (were 65).
+
 ## 3.2.0 — October 23, 2026
 
 **English: tells of AI writing.** A new `scripts/tells.py` scores each paragraph against the

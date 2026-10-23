@@ -129,8 +129,9 @@ python3 <skill>/scripts/tells.py 00-original.txt 01-rewritten.txt
 ```
 
 It scores every paragraph (3 = strong tell, 2 = stock word, 1 = weak alone) and prints the
-`--only` command for those at 3 or more, with a `--lead` when the paragraph opens with a
-stock connector. Regenerate them as candidates (step 9) rather than fixing them: a tell
+`--only` command for those worth regenerating (one strong tell, two stock words, or 6
+points), with a `--lead` when the paragraph opens with a stock connector. One stock word, a
+dash or a list of three alone is ordinary human prose: leave it. Regenerate them as candidates (step 9) rather than fixing them: a tell
 is never one of your one-to-three-word fixes. In English, do this before delivering; in
 Spanish, when the user wants the text to read less like AI, not only to pass a detector.
 It also lists **formatting tells** (a bold label on every list item, bold sprinkled in

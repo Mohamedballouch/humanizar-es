@@ -43,7 +43,6 @@ LANGUAGES = {
         "no_warn": set("""Antes Mientras Cuando Aunque Quizá Quizás Hoy Ahora Así Luego
         Entonces Incluso Tampoco Nunca Siempre Todo Toda Todos Todas Cada Otro Otra Más
         Menos Muy Desde Hasta Entre Sobre Tras Ante Según Durante Como Donde""".split()),
-        "suffixes": r"(ar|er|ir|mente)$",
         "hints": set("de la que el en y los las del se por un una con para es".split()),
     },
     "en": {
@@ -58,7 +57,6 @@ LANGUAGES = {
         Other Another More Less Very Since Until Between Over During How Where Why Once
         Instead Rather Despite Although Though Because Nevertheless Ultimately Finally
         Meanwhile Similarly Consequently Therefore Thus Yet So""".split()),
-        "suffixes": r"(ly|ing|ed)$",
         "hints": set("the and of to is that in it for with as on are this be".split()),
     },
 }
@@ -119,23 +117,35 @@ def split_blocks(sentences, pauses, rnd, lang):
     return [0] + sorted(cuts)
 
 
-# «Dr. Smith», «Sr. García», «e.g. Slack», «John F. Kennedy»: the period does not close
-# the sentence.
+# «Dr. Smith», «Sr. García», «e.g. Slack», «John F. Kennedy», «J.R.R. Tolkien», «9 a.m.
+# Everyone», «EE.UU. Allí», «cap. VI»: the period does not close the sentence.
 ABBREVIATION = re.compile(r"(?:^|\s)(?:Mr|Mrs|Ms|Dr|Prof|St|Sr|Sra|Srta|Dra|Lic|Ing|vs|etc|"
                           r"approx|aprox|e\.g|i\.e|U\.S|U\.K|p\.ej|Jr|Inc|Ltd|Corp|Fig|Vol|"
-                          r"al|cf|Gen|Gov|Sen|Rep|Mt|Ud|Uds|Sto|Sta)\.$", re.I)
-INITIAL = re.compile(r"(?:^|\s)[A-ZÁÉÍÓÚÑ]\.$")
+                          r"al|cf|Gen|Gov|Sen|Rep|Mt|Ud|Uds|Sto|Sta|Rev|Lt|Col|Capt|Sgt|Hon|"
+                          r"cap|lib|pág|págs|núm|ed|eds|op|cit|ibid)\.$", re.I)
+INITIAL = re.compile(r"(?:^|[\s.(«\"“'])[A-ZÁÉÍÓÚÑ]\.$")
+DOTTED = re.compile(r"(?:^|\s)(?:\w{1,3}\.){2,}$")  # a.m., D.C., EE.UU., U.S.A.
+BARE_NUMBER = re.compile(r"(?:^|\s)\(?\d{1,3}[.)]$")  # «1. Open the box. 2. Remove the tray.»
 
 
 def no_period_end(s):
     """True if the period that ends `s` does not end a sentence (or there is none)."""
     return (not s.endswith(".") or s.endswith("...") or bool(ABBREVIATION.search(s))
-            or bool(INITIAL.search(s)))
+            or bool(INITIAL.search(s)) or bool(DOTTED.search(s))
+            or bool(BARE_NUMBER.search(s)))
+
+
+def core(word):
+    """The word a name check looks at: «Microsoft's» -> «Microsoft», «I’m» -> «I»,
+    «¿Juan» -> «Juan»; «O'Brien» stays whole."""
+    m = re.match(r"[¿¡«\"“(]*([\w-]+(?:['’][A-ZÁÉÍÓÚÑ][\w-]*)?)", word)
+    return m.group(1) if m else word
 
 
 def keeps_capital(word, proper):
     """«AI», «COVID-19», «iPhone», «McDonald's» and known names keep their capitals when a
     sentence that opens with them is joined; «aI tools» would be a visible error."""
+    word = core(word)
     return word in proper or any(c.isupper() for c in word[1:])
 
 
@@ -158,14 +168,24 @@ def drop_fillers(sentences, lang):
 
 
 # Dashes as the universal connector are a tell of AI prose in English. --no-dashes turns
-# a dash between words into a comma; ranges like 1990–2000 and dialogue are left alone.
-DASH = re.compile(r"\s*—\s*|\s+(?:–|--)\s+")
+# a dash between words into a comma; ranges (1990–2000, 1939 – 1945), dashes that open a
+# line (dialogue, lists) and dialogue paragraphs are left alone.
+DASH = re.compile(r"[ \t]*—[ \t]*|[ \t]+(?:–|--)[ \t]+")
 
 
 def replace_dashes(paragraph):
     if paragraph.lstrip().startswith(("—", "–", "-")):  # dialogue
         return paragraph
-    out = DASH.sub(", ", paragraph)
+
+    def comma(m):
+        before, after = paragraph[:m.start()], paragraph[m.end():]
+        if (not before.strip() or before.endswith("\n")
+                or (before[-1:].isdigit() and after[:1].isdigit())):
+            return m.group(0)
+        return ", "
+
+    out = DASH.sub(comma, paragraph)
+    out = re.sub(r":[ \t]*,[ \t]*", ": ", out)
     out = re.sub(r",\s*,", ",", out)
     out = re.sub(r",\s*([.;:!?)\]»”\"])", r"\1", out)
     out = re.sub(r"([(\[«“])\s*,\s*", r"\1", out)
@@ -180,13 +200,14 @@ def detect_language(text):
 
 def proper_nouns(text, concepts=(), lang="es"):
     common = LANGUAGES[lang]["common"]
-    mid = set(re.findall(r"(?<=[a-záéíóúñü,;:] )([A-ZÁÉÍÓÚÑ][\w'-]+)", text)) - common
+    found = re.findall(r"(?<=[a-záéíóúñü,;:] )([A-ZÁÉÍÓÚÑ][\w'’-]+)", text)
+    mid = {core(w) for w in found} - common
     mid |= LANGUAGES[lang]["always_proper"]
     for _, variants in concepts:
         for v in variants:
             for w in v.rstrip("*").split():
                 if w[:1].isupper() and w not in common:
-                    mid.add(w)
+                    mid |= {w, core(w)}
     return mid
 
 
@@ -199,7 +220,7 @@ def join_paragraph(paragraph, proper, p=1.0, rnd=None, max_words=400, doubtful=N
         prev = out[-1]
         w = s.split()[0]
         base = w.strip(",;:")
-        if (no_period_end(prev) or rnd.random() >= p
+        if (no_period_end(prev) or BARE_NUMBER.match(s) or rnd.random() >= p
                 or len(prev.split()) + len(s.split()) > max_words):
             out.append(s)
             continue
@@ -215,9 +236,9 @@ def join_paragraph(paragraph, proper, p=1.0, rnd=None, max_words=400, doubtful=N
         elif base.lower() == c["and"] and base[:1].isupper():
             out[-1] = body + f" {c['and']} " + s[len(w) + 1:]
         else:
-            nxt = s if keeps_capital(base.lstrip("¿¡"), proper) else lower_first(s)
-            if doubtful is not None and not keeps_capital(base.lstrip("¿¡"), proper):
-                doubtful.append(base)
+            nxt = s if keeps_capital(base, proper) else lower_first(s)
+            if doubtful is not None and not keeps_capital(base, proper):
+                doubtful.append(core(base))
             out[-1] = body + f" {c['and']} " + nxt
     return " ".join(out)
 
@@ -232,7 +253,7 @@ def join_with_pauses(paragraph, proper, pauses, rnd, doubtful=None, lang="es"):
     for a, b in zip(starts, starts[1:]):
         out = sentences[a]
         for s in sentences[a + 1:b]:
-            if no_period_end(out):
+            if no_period_end(out) or BARE_NUMBER.match(s):
                 out += " " + s
                 continue
             w = s.split()[0].strip(",;:")
@@ -247,12 +268,12 @@ def join_with_pauses(paragraph, proper, pauses, rnd, doubtful=None, lang="es"):
                 glue = "; "
             else:
                 glue = NEUTRAL[lang][rnd.randrange(len(NEUTRAL[lang]))]
-            if keeps_capital(w.lstrip("¿¡"), proper):
+            if keeps_capital(w, proper):
                 nxt = s
             else:
                 nxt = lower_first(s)
                 if doubtful is not None and not o:
-                    doubtful.append(w)
+                    doubtful.append(core(w))
             out = out[:-1] + glue + nxt
         blocks.append(out)
     return " ".join(blocks)
@@ -287,8 +308,7 @@ def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, la
     if doubtful is not None:
         words = set(re.findall(r"\w+", text))
         doubtful.extend(sorted({w for w in lowered if w.lower() not in words
-                                and w not in c["common"] | c["no_warn"]
-                                and not re.search(c["suffixes"], w)}))
+                                and w not in c["common"] | c["no_warn"]}))
     return output
 
 
@@ -312,7 +332,7 @@ def main():
                     "whose author does not use them")
     args = ap.parse_args()
 
-    with open(args.input, encoding="utf-8") as fh:
+    with open(args.input, encoding="utf-8-sig") as fh:
         text = fh.read()
     concepts = check.load_concepts(args.concepts) if args.concepts else []
     doubtful = []

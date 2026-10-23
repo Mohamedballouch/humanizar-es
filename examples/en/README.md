@@ -35,6 +35,7 @@ python3 scripts/tells.py examples/en/original.txt examples/en/1-rewritten.txt
 ```
 
 The original scores 29 and the rewrite 17. What is left is mostly weak (lists of three,
-"studies show"), plus two paragraphs at 4: one opens with "Looking ahead," and the other
-with "Ultimately," and says "one-size-fits-all". Those two are the ones to regenerate as
-candidates, with the `--lead` that `tells.py` suggests.
+"studies show"). Two paragraphs carry two stock words or phrases each, which is what
+`tells.py` asks to regenerate: paragraph 3 ("foster", "Moreover,", which `join.py` then
+leaves out) and paragraph 7 (it opens with "Ultimately," and says "one-size-fits-all";
+`tells.py` suggests `--lead "There is"` for it).

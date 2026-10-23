@@ -91,6 +91,8 @@ def install_into(base, mode):
         remove_legacy(base)
         return
 
+    if os.path.islink(dest):  # a --symlink install: replace the link, not the repository
+        os.remove(dest)
     if os.path.realpath(dest) == os.path.realpath(HERE):
         sys.exit(f"ERROR: {dest} is this same repository")
     os.makedirs(base, exist_ok=True)

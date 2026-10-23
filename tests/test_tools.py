@@ -118,6 +118,27 @@ class Check(unittest.TestCase):
             self.assertIn("b.txt: 60", r.stdout)
             self.assertNotIn("1,990", r.stdout.split("FIGURES")[1])
 
+    def test_a_lost_negation_is_not_hidden_by_the_same_pair_elsewhere(self):
+        lost = check.negations("No es fácil. Pero no es imposible.") - check.negations(
+            "No es fácil. Pero es imposible.")
+        self.assertEqual(sorted(lost), ["no es"])
+        self.assertEqual(sorted(check.negations("It doesn't apply.") - check.negations("It applies.")),
+                         ["not apply"])
+        self.assertFalse(check.negations("It doesn’t apply.") - check.negations("It does not apply."))
+
+    def test_a_byte_order_mark_does_not_hide_the_first_concept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conc, a = os.path.join(tmp, "c.txt"), os.path.join(tmp, "a.txt")
+            with open(conc, "w", encoding="utf-8-sig") as fh:  # as Notepad saves it
+                fh.write("Office\n")
+            with open(a, "w", encoding="utf-8-sig") as fh:
+                fh.write("Moreover, the Office opened.\n")
+            r = run(sys.executable, script("check.py"), a, a, "--concepts", conc)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertNotIn("\ufeff", r.stdout)
+            r = run(sys.executable, script("tells.py"), a)
+            self.assertIn("stock opening", r.stdout)
+
     def test_missing_file_exits_with_two(self):
         r = run(sys.executable, script("check.py"), ORIGINAL, "does-not-exist.txt")
         self.assertEqual(r.returncode, 2)
@@ -257,6 +278,49 @@ class Join(unittest.TestCase):
         self.assertIn("- First item and it has two sentences.\n- Second item and also two.", out)
         self.assertIn("| a. B | c. D |", out)
         self.assertIn("Plain text and more text.", out)
+
+    def test_initials_dotted_abbreviations_and_numbered_steps_are_not_sentence_ends(self):
+        cases = [
+            ("The Hobbit was written by J.R.R. Tolkien. It was a hit.", "en",
+             "The Hobbit was written by J.R.R. Tolkien and it was a hit."),
+            ("She lives in Washington, D.C. The city is big.", "en",
+             "She lives in Washington, D.C. The city is big."),
+            ("The march was led by Rev. Martin Luther King. It was huge.", "en",
+             "The march was led by Rev. Martin Luther King and it was huge."),
+            ("We met at 9 a.m. Everyone came.", "en", "We met at 9 a.m. Everyone came."),
+            ("Viajó a EE.UU. Allí vivió.", "es", "Viajó a EE.UU. Allí vivió."),
+            ("Lo dice en el libro I, cap. VI de su obra. Es claro.", "es",
+             "Lo dice en el libro I, cap. VI de su obra y es claro."),
+            ("1. Open the box. 2. Remove the tray. 3. Close it.", "en",
+             "1. Open the box. 2. Remove the tray. 3. Close it."),
+        ]
+        for text, lang, expected in cases:
+            for pauses in (None, 1):
+                out = join.join_text(text, lang=lang, pauses=pauses).strip()
+                if pauses is None:
+                    self.assertEqual(out, expected)
+                self.assertNotRegex(out, r"(?:J\.R\.R|D\.C|Rev|a\.m|EE\.UU|cap) (?:and|y) ")
+
+    def test_names_with_a_possessive_or_a_curly_apostrophe_keep_their_capital(self):
+        self.assertIn("and Microsoft's survey", join.join_text(
+            "Sales grew fast. Microsoft's survey said so.", [("Microsoft", ["Microsoft"])], lang="en"))
+        self.assertIn("and I’m tired", join.join_text("It was late. I’m tired.", lang="en"))
+        self.assertIn("and O'Brien came", join.join_text("It was late. O'Brien came.", lang="en"))
+
+    def test_lowercased_names_ending_like_verbs_are_still_reported(self):
+        doubtful = []
+        join.join_text("The trip was long. Italy was nice. Boeing built it.", doubtful=doubtful,
+                       lang="en")
+        self.assertEqual(doubtful, ["Boeing", "Italy"])
+        doubtful = []
+        join.join_text("Javier estaba cansado. Pilar no vino.", doubtful=doubtful, lang="es")
+        self.assertEqual(doubtful, ["Pilar"])
+
+    def test_no_dashes_leaves_ranges_and_line_dashes(self):
+        self.assertEqual(join.replace_dashes("It ran in 1990—2000 and from 1939 – 1945 — mostly."),
+                         "It ran in 1990—2000 and from 1939 – 1945, mostly.")
+        self.assertEqual(join.replace_dashes("Pros:\n— fast\n— cheap"), "Pros:\n— fast\n— cheap")
+        self.assertEqual(join.replace_dashes("Pros: — fast"), "Pros: fast")
 
     def test_detects_the_language(self):
         self.assertEqual(join.detect_language(read(ORIGINAL)), "es")
@@ -616,6 +680,38 @@ class Rewrite(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(read(out), "Intro rewritten.\n\n- first thing.\n- second thing.\n")
 
+    def test_quotes_pair_in_order_and_ignore_the_apostrophe_style(self):
+        o = 'Critics called the plan "naive" while supporters described it as "bold".'
+        self.assertEqual(rewrite.quotations(o), [])
+        self.assertIsNone(rewrite.citation_problem(o, 'Critics said "naive"; backers said "bold".'))
+        self.assertIsNone(rewrite.citation_problem("“It’s over now, my friends.”",
+                                                   'He said "It\'s over now, my friends."'))
+        self.assertIsNone(rewrite.citation_problem("Use grew (from 5% to 30% in two years).",
+                                                   "Use grew (from 5% to 30% within two years)."))
+        self.assertEqual(rewrite.citation_problem("Smith wrote it.", "Smith wrote it (Jones, 2019)."),
+                         "(invented reference)")
+
+    def test_a_url_in_angle_quotes_may_lose_its_quotes(self):
+        self.assertIsNone(rewrite.markup_problem("Ver «https://ejemplo.org/guia» hoy.",
+                                                 "Mira https://ejemplo.org/guia hoy."))
+
+    def test_the_percent_sign_goes_back_to_the_right_figure(self):
+        self.assertEqual(rewrite.restore_percent_signs("It is 60%.", "It is 60 percent."),
+                         "It is 60 percent.")
+        self.assertEqual(rewrite.restore_percent_signs("Es 60%.", "Es 60 por ciento."),
+                         "Es 60 por ciento.")
+        self.assertEqual(rewrite.restore_percent_signs("In the 5 years, sales fell 5%.",
+                                                       "Over the 5 years sales dropped 5."),
+                         "Over the 5 years sales dropped 5%.")
+
+    def test_bullets_of_six_words_or_more_are_rewritten(self):
+        text = "- Faster page loads with optimized image caching\n- Fast setup\n"
+        answers = {"Faster page": [" now load quicker thanks to smarter image caching."]}
+        r, out, calls = self._run_scripted(text, answers, "--tries", "1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(out, "- Faster page now load quicker thanks to smarter image caching.\n"
+                              "- Fast setup\n")
+
     def _echo_llama(self, tmp):
         """A fake llama that writes back a different, faithful version each call."""
         for f in (rewrite.BASE, rewrite.ADAPTER):
@@ -791,6 +887,26 @@ class Tells(unittest.TestCase):
         self.assertEqual(numbers, [2, 3])  # the heading and the code are not prose
         self.assertEqual(tells.formatting("## How the six options compare"), [])
 
+    def test_ordinary_human_prose_is_not_flagged(self):
+        for text, lang in [("The files were not publicly disclosed until 2019.", "en"),
+                           ("Let me know if Tuesday works for you.", "en"),
+                           ("No dudes en escribirme si necesitas algo.", "es"),
+                           ("El autor —según dice— vino tarde, y su hermano —el mayor— también.", "es"),
+                           ("The Old Testament and the New Testament differ.", "en"),
+                           ("Kids in foster care need foster parents.", "en"),
+                           ("We use robust standard errors that align with the literature.", "en"),
+                           ("Queremos fomentar el empleo y potenciar la industria.", "es")]:
+            self.assertFalse(tells.flagged(tells.find(text, lang)), (text, tells.find(text, lang)))
+        self.assertTrue(tells.flagged(tells.find("Ultimately, there is no one-size-fits-all answer.", "en")))
+
+    def test_long_pathological_input_stays_fast(self):
+        import time
+        t0 = time.time()
+        tells.find("a-" * 8000, "en")
+        tells.find("“" * 30000 + "x" * 30000, "en")
+        rewrite.quotations("“" * 30000 + "x" * 30000)
+        self.assertLess(time.time() - t0, 5)
+
     def test_cli_names_the_paragraphs_to_regenerate(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = os.path.join(tmp, "text.txt")
@@ -811,13 +927,18 @@ class Tells(unittest.TestCase):
 class Blocks(unittest.TestCase):
     DOC = ("# Title\n\nIntro paragraph. It has two sentences.\n\n```python\nx = 1\n\ny = 2\n```\n\n"
            "- **Speed:** pages load faster.\n- Second item that wraps\n  onto a second line.\n\n"
-           "| a | b |\n|---|---|\n\n> A quote here.\n\n    indented code\n\n---\n\nLast paragraph.\n")
+           "| a | b |\n|---|---|\n\n> A quote here.\n\n    indented code\n    more code\n\n---\n\nLast paragraph.\n")
 
     def test_kinds_and_a_fence_with_blank_lines_stays_one_block(self):
         got = [blocks.kind(b) for b in blocks.split(self.DOC)]
         self.assertEqual(got, ["heading", "prose", "code", "list", "table", "quote", "code",
                                "rule", "prose"])
         self.assertEqual(blocks.split(self.DOC)[2], "```python\nx = 1\n\ny = 2\n```")
+
+    def test_an_indented_first_line_is_a_paragraph_not_code(self):
+        essay = "\tMoreover, the results came quickly.\n\n\tThe second paragraph follows here.\n"
+        self.assertEqual([blocks.kind(b) for b in blocks.split(essay)], ["prose", "prose"])
+        self.assertEqual(blocks.split(essay)[0], "Moreover, the results came quickly.")
 
     def test_list_items_keep_markers_and_join_continuations(self):
         lst = blocks.split(self.DOC)[3]
@@ -928,6 +1049,17 @@ class Installer(unittest.TestCase):
             run(*INSTALL, "--destino", tmp, "--desinstalar")
             self.assertFalse(os.path.exists(dest))
 
+    def test_a_symlinked_install_can_be_replaced_by_a_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "skills")
+            r = run(sys.executable, os.path.join(ROOT, "install.py"), "--dest", dest, "--symlink")
+            if "could not create the link" in r.stdout:
+                self.skipTest("no symlinks here")
+            r = run(sys.executable, os.path.join(ROOT, "install.py"), "--dest", dest)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertFalse(os.path.islink(os.path.join(dest, "humanizar-es")))
+            self.assertTrue(os.path.isfile(os.path.join(dest, "humanizar-es", "SKILL.md")))
+
     def test_removes_an_install_under_the_old_test_name(self):
         with tempfile.TemporaryDirectory() as tmp:
             old = os.path.join(tmp, "humanize-local")
@@ -997,6 +1129,50 @@ class Installer(unittest.TestCase):
             r = run(sys.executable, "-c", code, env=env)
             self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
             self.assertIn("unknown argument: -dev", r.stdout)
+
+    def test_model_download_resumes_when_the_server_closes_early(self):
+        """The server sends 2 of 3 MB and closes cleanly; the installer must resume with a
+        Range request, not take the file as finished, call it corrupted and delete it."""
+        import contextlib
+        import hashlib
+        import http.server
+        import io
+        import threading
+        import install_model
+        data = os.urandom(3 << 20)
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                rng = self.headers.get("Range")
+                seen.append(rng)
+                start = int(rng.split("=")[1].rstrip("-")) if rng else 0
+                self.send_response(206 if rng else 200)
+                self.send_header("Content-Length", str(len(data) - start))
+                self.end_headers()
+                body = data[start:]
+                self.wfile.write(body if rng else body[:2 << 20])  # the first answer is cut
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_port}/model.gguf"
+        with tempfile.TemporaryDirectory() as tmp:
+            old_dir, old_sleep = install_model.rewrite.MODEL_DIR, install_model.time.sleep
+            install_model.rewrite.MODEL_DIR = tmp
+            install_model.time.sleep = lambda s: None
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    install_model.download("model.gguf", url, hashlib.sha256(data).hexdigest())
+            finally:
+                install_model.rewrite.MODEL_DIR, install_model.time.sleep = old_dir, old_sleep
+            with open(os.path.join(tmp, "model.gguf"), "rb") as fh:
+                self.assertEqual(fh.read(), data)
+        self.assertEqual(seen, [None, f"bytes={2 << 20}-"])
 
     def test_model_installer_has_hashes(self):
         s = read(script("install_model.py"))
