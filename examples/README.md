@@ -5,6 +5,8 @@ listed:
 
 - [`en/`](en/): remote work, in English.
 - [`es/`](es/): metaphysics, in Spanish.
+- [`latex/`](latex/): a short paper in LaTeX, with its PDF: math, citations, a table and a
+  bibliography that the pipeline keeps byte for byte.
 
 Each folder has `original.txt` → `1-rewritten.txt` (the model's rewrite, fixed by hand) →
 `2-final.txt` (after `join.py`), plus its `concepts.txt`.

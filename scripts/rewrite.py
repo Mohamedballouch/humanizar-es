@@ -644,6 +644,17 @@ def take(original, output, spec):
     # line, as rewrite.py writes it
     keep_lines = fmt == "latex" or blocks.kind(new) == "list"
     paragraphs[int(n) - 1] = new if keep_lines else " ".join(new.split())
+    # a candidate may have been edited by hand: its figures are checked against the original
+    with open(original, encoding="utf-8-sig") as fh:
+        source = blocks.parse(fh.read(), fmt)[1][int(n) - 1]
+    plain = latex.plain if fmt == "latex" else (lambda t: t)
+    lost = numbers_lost(plain(source), plain(new))
+    added = numbers_added(plain(source), plain(new))
+    if lost or added:
+        print(f"WARNING: paragraph {n} of {path} " + "; ".join(
+            x for x in (lost and "lost the figures " + ", ".join(lost),
+                        added and "adds the figures " + ", ".join(added)) if x)
+              + " of the original. Put them back, or take another candidate.")
     with open(output, "w", encoding="utf-8") as fh:
         fh.write(blocks.unparse(frame, paragraphs))
     print(f"Paragraph {n} of {output} now comes from {path}")

@@ -1,8 +1,8 @@
 ---
 name: humanizar-es
-description: Rewrites AI-generated text (Spanish or English) so AI detectors read it as human - 0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero on the same test essay - without changing what it says and without adding typos. Runs locally with no API or cost, in four measured stages - a base model without chat training rewrites (rewrite.py), fidelity is guarded (concepts, quotes, invented references, copying; check.py), the rhythm is rebuilt in blocks of uneven length (join.py --pauses 2), and paragraphs a detector still flags, or that keep stock AI phrases (tells.py), are regenerated as candidates and selected (rewrite.py --candidates, --lead, --take). Use when asked to "humanize" text, "make it not detectable as AI", "pass Grammarly", "remove AI tells", "make it not sound like ChatGPT", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA", "que no suene a ChatGPT".
+description: Rewrites AI-generated text (Spanish or English) so AI detectors read it as human - 0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero on the same test essay - without changing what it says and without adding typos. Runs locally with no API or cost, in four measured stages - a base model without chat training rewrites (rewrite.py), fidelity is guarded (concepts, quotes, invented references, copying; check.py), the rhythm is rebuilt in blocks of uneven length (join.py --pauses 2), and paragraphs a detector still flags, or that keep stock AI phrases (tells.py), are regenerated as candidates and selected (rewrite.py --candidates, --lead, --take). Takes text, Markdown, LaTeX papers (math and citations kept) and PDF (convert.py); every figure is checked. Use when asked to "humanize" text, "make it not detectable as AI", "pass Grammarly", "remove AI tells", "make it not sound like ChatGPT", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA", "que no suene a ChatGPT".
 metadata:
-  version: "3.3.0"
+  version: "3.4.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -60,10 +60,34 @@ hope this helps", "Let me know if…"): it is not part of the text. Never overwr
 original. Markdown is fine: code, tables, headings and quotations are kept as they are, and
 a list is rewritten item by item with its markers (short items stay as they are).
 
+**A paper in LaTeX** (journal or conference): copy the main `.tex` to `00-original.tex` in
+the paper's folder (where its figures and `.bib` live) and use `.tex` names in every step
+(`01-rewritten.tex`, `02-final.tex`). Only the prose is rewritten: the preamble, sections,
+equations, figures, tables, algorithms, theorems, captions, comments and bibliography stay
+byte for byte, and inside a paragraph math, `\cite`, `\ref`, footnotes and every other command
+reach the model as placeholders `[1]`, `[2]`… that it must keep. Papers split into several
+files (`\input{intro}`) are done one file at a time.
+
+**A PDF**, only when there is no source (ask for the `.tex` or the Word file first: it is
+always the better input):
+
+```bash
+python3 <skill>/scripts/convert.py paper.pdf -o 00-original.md
+```
+
+It joins each paragraph's lines, undoes hyphenation, drops page numbers and running
+headers, and fences equations, table cells and references so they are kept. It prints how
+many figures it read; if it warns that a figure of the PDF is not in the text, fix that
+first. **Read `00-original.md` with the user before going on**: an extracted text can carry
+broken lines or table cells as prose. The PDF made back at the end has the same words in a
+plain layout, not the original's.
+
 ### 2. Ask what it's for
 
 If it's graded academic work, or work where AI use must be disclosed, say so before going
-on (see *Responsible use*).
+on (see *Responsible use*). For a paper going to a journal or a conference, ask whether the
+venue's policy allows AI-assisted writing and what it asks authors to disclose: most allow
+it with disclosure, some forbid it, and rewriting does not change what has to be disclosed.
 
 ### 3. Check the installation (once)
 
@@ -201,8 +225,24 @@ join again.
 python3 <skill>/scripts/check.py 00-original.txt 02-final.txt --concepts concepts.txt
 ```
 
+**Every figure must survive.** `check.py` counts each number of the original (years,
+amounts, percentages, decimals with their precision, «siglo XX») and exits with 1 if a
+version lost one or added one; the run is not done until it prints "FIGURES: all … of the
+original are in every version, none added". Put a lost figure back by hand (a one-word
+fix); an added one is a detail the original never gave: remove it or regenerate.
+
 Deliver `02-final.txt`, the fidelity table and the list of fixes, **in the format the
-user will hand in** (headings, bibliography): the context changes ZeroGPT's score. Warn
+user will hand in** (headings, bibliography): the context changes ZeroGPT's score. For a
+paper, deliver `02-final.tex` and its PDF:
+
+```bash
+python3 <skill>/scripts/convert.py 02-final.tex -o 02-final.pdf     # LaTeX: compiles it, BibTeX too
+python3 <skill>/scripts/convert.py 02-final.md -o 02-final.pdf      # text from a PDF: a plain PDF
+```
+
+It needs a LaTeX engine (TeX Live, MacTeX, MiKTeX or tectonic); without one, it says so and
+the `.tex` can be compiled on Overleaf. From text it reads the new PDF back and warns if a
+figure did not make it in. Warn
 that sentences stay longer than in a polished essay. If the text is over ~1,400 words, tell
 the user to measure it in Grammarly in two halves; GPTZero's free scan reads 10,000
 characters. Ask them to measure in their detector **together with a text of their own
@@ -280,9 +320,11 @@ risk before proceeding.
 - `scripts/rewrite.py` — steps 5, 6 and 9: rewrite with the local base model, guard
   fidelity, `--only`, `--candidates`, `--lead`, `--take`
 - `scripts/join.py` — step 7: rebuild the rhythm of each paragraph
-- `scripts/check.py` — concepts, negations and figures, original against version
+- `scripts/check.py` — concepts, negations and figures (counted), original against version
+- `scripts/latex.py` — LaTeX papers: what is prose, placeholders for math and commands
+- `scripts/convert.py` — PDF to text, text to PDF, LaTeX to PDF
 - `scripts/blocks.py` — paragraphs and Markdown blocks (code, tables, lists), shared by all
 - `scripts/tells.py` — steps 6 and 9: tells of AI writing per paragraph, what to regenerate
 - `references/evidence.md` — every measurement
 - `references/detectors.md` — how to measure in Grammarly, GPTZero and ZeroGPT, with controls
-- `examples/` — worked examples in English and Spanish
+- `examples/` — worked examples in English and Spanish, and a LaTeX paper with its PDF

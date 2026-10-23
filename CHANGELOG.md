@@ -1,5 +1,42 @@
 # Changelog
 
+## 3.4.0 — October 23, 2026
+
+**Papers: LaTeX in and out, PDF in and out, and figures that cannot change.**
+
+- `scripts/latex.py`: a `.tex` file is read as prose plus a frame kept byte for byte (the
+  preamble, sections, equations, figures, tables, algorithms, theorems, captions, comments,
+  `\iffalse`, the bibliography). Inside a paragraph, math, `\cite`, `\ref`, `\label`,
+  footnotes, `\emph` and every other command become placeholders the model must keep; a try
+  that loses, repeats or invents one, or writes LaTeX of its own, is not used. The
+  abstract and `itemize`/`enumerate` lists are rewritten (item by item). Accent macros are
+  read as letters; rewritten paragraphs come back one sentence per line. `rewrite.py`,
+  `join.py`, `tells.py` and `check.py` take `.tex` files directly; `--only`, `--candidates`
+  and `--take` work on them.
+- `scripts/convert.py`: PDF to Markdown (pdftotext or pypdf; lines joined, hyphenation
+  undone, page numbers and running headers dropped, ligatures and accents repaired,
+  headings, bullets and captions recognized, equations, table cells and references fenced
+  so they are kept); Markdown or text to PDF through a generated LaTeX article (Greek
+  letters, math symbols and sub/superscript digits printed by pdflatex too); a `.tex`
+  paper to PDF with tectonic, latexmk or pdflatex/xelatex/lualatex, BibTeX included, the
+  auxiliary files kept out of the paper's folder. Without an engine it says to use
+  Overleaf.
+- **Figures, strictly.** `check.py` now counts every figure (a year that appears twice and
+  is kept once is lost), compares decimals with their precision («0.50» is not «0.5»,
+  «1.5» is not «15», «1,990» is «1990»), reads roman numerals («siglo XX», «Phase II»),
+  reports figures a version **added**, and exits with 1 on any change. `rewrite.py` never
+  uses a try that adds or changes a figure. `rewrite.py --take` warns when the candidate
+  taken (perhaps edited by hand) changed a figure. `convert.py` reports the figures it read
+  from a PDF and reads back the PDF it makes to confirm every figure is in it. A table cell
+  or a section number alone on a line is no longer taken for a page number. `join.py`
+  is tested never to change a figure.
+- The English example now shows its added figure: "COVID-19 pandemic" for "global pandemic"
+  adds a 19 the original never had, and `check.py` says so.
+- `examples/latex/`: a short paper with math, citations, a figure, a table, a list and a
+  bibliography, and its PDF.
+- Docs: the paper workflow in SKILL.md and both READMEs; a note to check the venue's
+  policy on AI-assisted writing and disclosure. 110 tests.
+
 ## 3.3.0 — October 23, 2026
 
 **Documents, not only essays.** Emails, posts and documentation carry Markdown; until now

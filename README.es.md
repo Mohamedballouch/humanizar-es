@@ -271,6 +271,40 @@ una idea.
 
 Hay ejemplos completos, con cada arreglo a mano anotado, en [`examples/`](examples/).
 
+### Artículos: LaTeX entra, LaTeX sale; PDF entra, PDF sale
+
+Con un `.tex`, los scripts trabajan solo sobre la prosa. El preámbulo, las secciones, las
+ecuaciones, las figuras, las tablas, los algoritmos, los teoremas, los pies de figura, los
+comentarios y la bibliografía quedan idénticos byte a byte; dentro de un párrafo, las
+fórmulas, `\cite`, `\ref`, las notas al pie y cualquier otro comando llegan al modelo como
+marcadores (`[1]`, `[2]`…), y un intento que pierda, repita o invente uno no se usa. Los
+párrafos reescritos salen con una oración por línea, así `git diff` muestra los cambios del
+artículo oración por oración.
+
+```bash
+python3 scripts/rewrite.py articulo.tex -o 01-reescrito.tex --concepts concepts.txt
+python3 scripts/join.py 01-reescrito.tex -o 02-final.tex --pausas 2
+python3 scripts/check.py articulo.tex 02-final.tex --concepts concepts.txt
+python3 scripts/convert.py 02-final.tex -o 02-final.pdf      # lo compila, BibTeX incluido
+```
+
+Si solo tienes el PDF, `convert.py` lo pasa a texto primero (une las líneas, deshace la
+separación silábica, quita números de página y encabezados, y encierra ecuaciones, celdas
+de tablas y referencias para que no se toquen) y al final vuelve a hacer un PDF. Ese PDF
+tiene las mismas palabras con un diseño sencillo, no el del original: si tienes la fuente,
+úsala.
+
+```bash
+python3 scripts/convert.py articulo.pdf -o 00-original.md    # necesita pdftotext o pypdf
+python3 scripts/convert.py 02-final.md -o 02-final.pdf       # necesita un motor de LaTeX
+```
+
+**Ninguna cifra cambia en silencio.** Se cuentan todas las cifras del original (años,
+montos, porcentajes, decimales con su precisión, «siglo XX»): un intento que agrega o cambia
+una nunca se usa, uno que pierde una se repite, `check.py` sale con 1 si una versión perdió
+o agregó alguna, y `convert.py` informa las cifras que leyó de un PDF y relee el PDF que
+genera para confirmar que estén todas. Ver [`examples/latex/`](examples/latex/).
+
 ---
 
 ## Idiomas
@@ -316,7 +350,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 93 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 110 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -345,7 +379,9 @@ No. Corre en CPU, con prioridad baja, así que tu computadora sigue usable.
 Hecho para textos que firmas y de los que respondes: contenido de marca, prospección,
 documentación, correos, borradores escritos con ayuda de IA. **No lo uses para entregar
 como propio un trabajo evaluado donde la IA está prohibida o debe declararse.** Ese
-problema no es técnico: es de honestidad académica.
+problema no es técnico: es de honestidad académica. Para un artículo, lee antes la política
+de la revista o del congreso sobre la escritura asistida por IA: la mayoría la permite si se
+declara, algunas la prohíben, y reescribir el texto no cambia lo que tienes que declarar.
 
 ---
 
@@ -361,10 +397,12 @@ humanizar-es/
 │   ├── check.py             etapa 2: conceptos y negaciones, original contra reescritura
 │   ├── tells.py             etapas 2 y 4: frases hechas de IA por párrafo, qué regenerar
 │   ├── blocks.py            párrafos y bloques de Markdown (código, tablas, listas), compartido
+│   ├── latex.py             artículos en LaTeX: la prosa, y marcadores para fórmulas y comandos
+│   ├── convert.py           PDF a texto, texto a PDF, LaTeX a PDF
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   93 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   110 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,

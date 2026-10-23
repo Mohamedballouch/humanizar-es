@@ -272,6 +272,38 @@ it dropped an idea.
 
 Worked examples, with every hand fix listed, are in [`examples/`](examples/).
 
+### Papers: LaTeX in, LaTeX out; PDF in, PDF out
+
+Give the scripts a `.tex` and they work on the prose only. The preamble, sections,
+equations, figures, tables, algorithms, theorems, captions, comments and bibliography stay
+byte for byte; inside a paragraph, math, `\cite`, `\ref`, footnotes and every other command
+reach the model as placeholders (`[1]`, `[2]`…), and a try that drops, repeats or invents
+one is not used. Rewritten paragraphs come back one sentence per line, so `git diff` shows
+the paper's changes sentence by sentence.
+
+```bash
+python3 scripts/rewrite.py paper.tex -o 01-rewritten.tex --concepts concepts.txt
+python3 scripts/join.py 01-rewritten.tex -o 02-final.tex --pauses 2
+python3 scripts/check.py paper.tex 02-final.tex --concepts concepts.txt
+python3 scripts/convert.py 02-final.tex -o 02-final.pdf      # compiles it, BibTeX included
+```
+
+With only a PDF, `convert.py` turns it into text first (it joins lines, undoes hyphenation,
+drops page numbers and running headers, and fences equations, table cells and references
+so they are kept), and turns the result back into a PDF at the end. That PDF has the same
+words in a plain layout, not the original's: when you have the source, use it.
+
+```bash
+python3 scripts/convert.py paper.pdf -o 00-original.md       # needs pdftotext or pypdf
+python3 scripts/convert.py 02-final.md -o 02-final.pdf       # needs a LaTeX engine
+```
+
+**Figures never change silently.** Every number of the original (years, amounts,
+percentages, decimals with their precision, «siglo XX») is counted: a try that adds or
+changes one is never used, a try that drops one is retried, `check.py` exits with 1 if a
+version lost or added any, `convert.py` reports the figures it read from a PDF and reads
+the PDF it makes back to confirm they are all there. See [`examples/latex/`](examples/latex/).
+
 ---
 
 ## Languages
@@ -316,7 +348,7 @@ No. It changes who wrote the sentences and their rhythm, not the spelling.
 Three of four essays reached 0% in Grammarly, and the latest one passes Grammarly, GPTZero
 and ZeroGPT at once. The pieces that can be deterministic are (the joining is seeded;
 ZeroGPT gives the same score for the same text), output that copies the original is
-refused, and 93 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
+refused, and 110 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
 over time, which is why every session carries controls.
 
 **Does the selection step send my text anywhere?**
@@ -343,7 +375,10 @@ No. It runs on CPU, at low priority, so your computer stays usable.
 
 Made for text you sign and answer for: brand content, outreach, documentation, emails,
 drafts written with AI help. **Don't use it to hand in graded work as your own where AI is
-banned or must be disclosed.** That problem isn't technical; it's academic honesty.
+banned or must be disclosed.** That problem isn't technical; it's academic honesty. For a
+paper, read the journal's or conference's policy on AI-assisted writing first: most allow
+it with a disclosure, some forbid it, and rewriting the text does not change what you have
+to disclose.
 
 ---
 
@@ -359,10 +394,12 @@ humanizar-es/
 │   ├── check.py             stage 2: concepts and negations, original vs rewrite
 │   ├── tells.py             stages 2 and 4: stock AI phrases per paragraph, what to regenerate
 │   ├── blocks.py            paragraphs and Markdown blocks (code, tables, lists), shared
+│   ├── latex.py             LaTeX papers: the prose, and placeholders for math and commands
+│   ├── convert.py           PDF to text, text to PDF, LaTeX to PDF
 │   └── join.py              stage 3: rebuild the rhythm of each paragraph
 ├── examples/                worked examples in Spanish and English
 ├── references/              every measurement, and how to measure
-└── tests/                   93 tests on Ubuntu, macOS and Windows (no network, no model)
+└── tests/                   110 tests on Ubuntu, macOS and Windows (no network, no model)
 ```
 
 The old script names (`hip.py`, `unir.py`, `verificar_fidelidad.py`, `instalar_hip.py`)

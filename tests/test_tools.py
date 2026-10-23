@@ -24,11 +24,17 @@ ORIGINAL_EN = os.path.join(EX_EN, "original.txt")
 REWRITTEN_EN = os.path.join(EX_EN, "1-rewritten.txt")
 FINAL_EN = os.path.join(EX_EN, "2-final.txt")
 CONCEPTS_EN = os.path.join(EX_EN, "concepts.txt")
+PAPER = os.path.join(ROOT, "examples", "latex", "paper.tex")
+PAPER_PDF = os.path.join(ROOT, "examples", "latex", "paper.pdf")
+HAS_PDFLATEX = bool(shutil.which("pdflatex"))
+CAN_READ_PDF = bool(shutil.which("pdftotext"))
 
 sys.path.insert(0, SCRIPTS)
 import blocks  # noqa: E402
 import check  # noqa: E402
+import convert  # noqa: E402
 import join  # noqa: E402
+import latex  # noqa: E402
 import rewrite  # noqa: E402
 import tells  # noqa: E402
 
@@ -691,6 +697,19 @@ class Rewrite(unittest.TestCase):
         self.assertIsNone(rewrite.markup_problem("Write to ana@example.com today.",
                                                  "Send it to ana@example.com now."))
 
+    def test_take_warns_when_a_candidate_changed_a_figure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out, cand = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Sales rose 5% in 2020 across the region.\n")
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("Sales went up 5% in 2020 in the region.\n")
+            with open(cand, "w", encoding="utf-8") as fh:
+                fh.write("Sales went up 6% in 2020 in the region.\n")  # edited by hand
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--take", "1=" + cand)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("lost the figures 5; adds the figures 6", r.stdout)
+
     def test_take_keeps_the_lines_of_a_list_candidate(self):
         with tempfile.TemporaryDirectory() as tmp:
             src, out, cand = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
@@ -997,6 +1016,206 @@ class Blocks(unittest.TestCase):
             text = read(f)
             self.assertEqual(blocks.split(text),
                              [x.strip() for x in re.split(r"\n\s*\n", text) if x.strip()])
+
+
+REVERSING_LLAMA = (
+    "import re, sys\n"
+    "args = sys.argv[1:]\n"
+    "prompt = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+    "src = prompt.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+    "rest = ' '.join(src.split()[2:])\n"
+    "# every word changes; placeholders, figures and punctuation stay\n"
+    "out = re.sub(r'[A-Za-z]{2,}', lambda m: m.group(0)[::-1], rest)\n"
+    "sys.stdout.buffer.write((' ' + out + '\\n</target_text>').encode('utf-8'))\n")
+
+
+class Latex(unittest.TestCase):
+    def test_parse_and_unparse_give_the_file_back(self):
+        texts = [read(PAPER), "No document environment. Just text.\n\nSecond.\n",
+                 "\\begin{document}\n\\iffalse\nhidden\n\\fi\nText $x$.\n\\[ y \\]\nMore.\n"
+                 "$$ z $$\n% c\n\\begin{itemize}\n\\item a \\begin{enumerate}\\item b\\end{enumerate}\n"
+                 "\\end{itemize}\n\\end{document}\n"]
+        for t in texts:
+            frame, paras = latex.parse(t)
+            self.assertEqual(latex.unparse(frame, paras), t)
+        _, paras = latex.parse(texts[2])
+        self.assertEqual(paras, ["Text $x$.", "More."])  # \iffalse, math, nested list kept
+
+    def test_the_paper_prose_is_found_and_the_rest_is_frame(self):
+        frame, paras = latex.parse(read(PAPER))
+        self.assertEqual(len(paras), 7)
+        self.assertTrue(paras[0].startswith("Remote work has fundamentally"))  # the abstract
+        self.assertTrue(latex.is_list(paras[3]))
+        body = "".join(frame)
+        for kept in ("\\begin{equation}", "\\begin{table}", "\\begin{figure}", "\\section{Method}",
+                     "\\begin{thebibliography}", "% Preamble comment"):
+            self.assertIn(kept, body)
+
+    def test_protect_and_restore(self):
+        p = ("Prior work by Mart\\'{\\i}nez et al.~\\cite{m19} used $y = \\beta x$ and 60\\% of "
+             "``data'' --- see Fig.~\\ref{f}. % note\nNext \\emph{line} here.")
+        visible, pieces = latex.protect(p)
+        self.assertEqual(visible, "Prior work by Martínez et al. [1] used [2] and 60% of “data” — "
+                                  "see Fig. [3]. [4] Next [5] here.")
+        back = latex.restore(visible, pieces)
+        self.assertIn("Martínez et al.~\\cite{m19} used $y = \\beta x$ and 60\\% of ``data'' --- see "
+                      "Fig.~\\ref{f}. % note\n", back)
+        self.assertIn("Next \\emph{line} here.", back)
+        self.assertEqual(latex.problem(visible, visible.replace(" [2]", ""), pieces), "(LaTeX changed)")
+        self.assertEqual(latex.problem(visible, visible + " [2]", pieces), "(LaTeX changed)")
+        self.assertEqual(latex.problem(visible, visible + " [9]", pieces), "(LaTeX changed)")
+        self.assertEqual(latex.problem(visible, visible + " \\bf", pieces), "(LaTeX changed)")
+        self.assertIsNone(latex.problem(visible, "[3] and [1] [2] [4] [5] moved.", pieces))
+
+    def test_verb_and_control_spaces(self):
+        visible, pieces = latex.protect("Run \\verb|a b| as shown, e.g.\\ the default.")
+        self.assertEqual(visible, "Run [1] as shown, e.g. the default.")
+        self.assertEqual(pieces[1], "\\verb|a b|")
+
+    def test_sentences_go_on_their_own_line_but_not_inside_math_or_comments(self):
+        t = "One sentence here. Two by Smith et al. Three $a. B$ four. % x. Y\nFive."
+        self.assertEqual(latex.sentence_lines(t),
+                         "One sentence here.\nTwo by Smith et al. Three $a. B$ four. % x. Y\nFive.")
+
+    def _rewrite_paper(self, tmp, *extra):
+        for f in (rewrite.BASE, rewrite.ADAPTER):
+            open(os.path.join(tmp, f), "w").close()
+        fake = os.path.join(tmp, "reversing_llama.py")
+        with open(fake, "w", encoding="utf-8") as fh:
+            fh.write(REVERSING_LLAMA)
+        src, out = os.path.join(tmp, "paper.tex"), os.path.join(tmp, "01-rewritten.tex")
+        shutil.copy(PAPER, src)
+        env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+        r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                "--threads", "1", *extra, env=env)
+        return r, src, out
+
+    def test_rewrite_and_join_a_paper_keep_its_latex_and_every_figure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, src, out = self._rewrite_paper(tmp)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("Paragraph 4 of 7: list, 2 of 2 items rewritten", r.stdout)
+            original, rewritten = read(src), read(out)
+            self.assertEqual(latex.parse(rewritten)[0], latex.parse(original)[0])  # frame
+            self.assertIn("degnahc", rewritten)  # the prose did change
+            for kept in ("~\\cite{smith2020,lee2021}", "~\\ref{fig:trend}", "$y = \\alpha + \\beta x$",
+                         "12\\% ni 2019", "\\emph{14}", "~\\eqref{eq:main}", "% TODO: update\n"):
+                self.assertIn(kept, rewritten)
+            final = os.path.join(tmp, "02-final.tex")
+            r = run(sys.executable, script("join.py"), out, "-o", final, "--pauses", "2")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = run(sys.executable, script("check.py"), src, out, final)
+            self.assertIn("FIGURES: all 45 of the original are in every version, none added.", r.stdout)
+            if HAS_PDFLATEX:
+                pdf = os.path.join(tmp, "final.pdf")
+                r = run(sys.executable, script("convert.py"), final, "-o", pdf)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_try_that_breaks_a_placeholder_is_not_used(self):
+        text = ("\\begin{document}\nPrior work by Smith~\\cite{s20} measured the output of "
+                "teams with a model $y = x$ over many years.\n\\end{document}\n")
+        dropped = " by Smith measured how teams produce with a model [2] across many years."
+        good = " by Smith [1] measured how teams produce with a model [2] across many years."
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Rewrite._scripted_llama(self, tmp, {"Prior work": [dropped, good]})
+            src, out = os.path.join(tmp, "in.tex"), os.path.join(tmp, "out.tex")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "2", env=env)
+            self.assertIn("done, try 2", r.stdout)
+            self.assertIn("Prior work by Smith~\\cite{s20} measured how teams produce with a model "
+                          "$y = x$ across many years.", read(out))
+
+    def test_tells_and_check_read_the_prose_of_a_paper(self):
+        r = run(sys.executable, script("tells.py"), PAPER)
+        self.assertIn("fundamentally reshaped", r.stdout)
+        self.assertIn("00-original.tex -o 01-rewritten.tex", r.stdout)
+        self.assertNotIn("alpha", r.stdout)
+        with tempfile.TemporaryDirectory() as tmp:
+            conc = os.path.join(tmp, "c.txt")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("Martínez\n")
+            r = run(sys.executable, script("check.py"), PAPER, PAPER, "--concepts", conc)
+            self.assertEqual(r.returncode, 0, r.stdout)  # «Mart\\'{\\i}nez» is «Martínez»
+
+
+class Convert(unittest.TestCase):
+    PAGES = ["Journal of Tests 12 (2026)\nAn Interesting Title\nAbstract\nRemote work has changed "
+             "how teams plan their weeks, and the effect on inter-\nnational firms is large. The "
+             "self-reported output rose by 7.5% in 2021.\n\x88 A first item of the list here.\n"
+             "\x88 A second item of the list here.\ny = α + βx\n(1)\n2\nResults\nThe cost "
+             "was\n38\n1\n",
+             "Journal of Tests 12 (2026)\nThis paragraph continues the page and ends with a full "
+             "stop after all these words.\n2\n",
+             "Journal of Tests 12 (2026)\nReferences\n[1] J. Smith. Working apart. 2020.\n3\n"]
+
+    def test_text_from_pdf_pages(self):
+        md = convert.pdf_to_text(self.PAGES)
+        self.assertNotIn("Journal of Tests", md)  # running header
+        self.assertIn("## Abstract", md)
+        self.assertIn("the effect on international firms is large. The self-reported output", md)
+        self.assertIn("- A first item of the list here.\n- A second item of the list here.", md)
+        self.assertIn("```text\ny = α + βx\n(1)\n```", md)
+        self.assertIn("## References\n\n```text\n[1] J. Smith. Working apart. 2020.\n```", md)
+        self.assertNotRegex(md, r"(?m)^[123]$")  # page numbers
+        self.assertIn("## 2 Results", md)  # a section number is not a page number
+        self.assertIn("38", md)  # nor is a lone figure in a table
+        removed = []
+        md = convert.pdf_to_text(self.PAGES, removed)
+        self.assertEqual(removed.count("Journal of Tests 12 (2026)"), 3)
+        lost = check.numbers_lost(convert.normalize("\n".join(self.PAGES)), md)
+        self.assertEqual(sorted(lost), sorted(check.numbers_lost("\n".join(removed), "")))
+
+    def test_text_to_latex_escapes_and_keeps_structure(self):
+        tex = convert.text_to_latex("## Results\n\nCost: $5 & 10% of R_t, with α ≤ 0.5.\n\n"
+                                    "- one item here\n- two\n\n```text\n[1] Ref. 2020\n```\n")
+        self.assertIn("\\section*{Results}", tex)
+        self.assertIn("Cost: \\$5 \\& 10\\% of R\\_t, with \\ensuremath{\\alpha} \\ensuremath{\\leq} 0.5.", tex)
+        self.assertIn("\\begin{itemize}\n  \\item one item here\n  \\item two\n\\end{itemize}", tex)
+        self.assertIn("\\ttfamily\n[1] Ref. 2020\n", tex)
+        self.assertEqual(convert.escape("CO₂ and x⁴"), "CO\\textsubscript{2} and x\\textsuperscript{4}")
+
+    @unittest.skipUnless(CAN_READ_PDF, "needs pdftotext")
+    def test_the_example_pdf_comes_back_as_its_prose(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "paper.md")
+            r = run(sys.executable, script("convert.py"), PAPER_PDF, "-o", md)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            text = read(md)
+            self.assertIn("Prior work by Martínez et al. [3] measured output", text)
+            self.assertIn("- A panel of 1,200 employees observed over 24 months in 14 firms.", text)
+            self.assertIn("## References", text)
+            if HAS_PDFLATEX:
+                pdf = os.path.join(tmp, "back.pdf")
+                r = run(sys.executable, script("convert.py"), md, "-o", pdf)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertGreater(os.path.getsize(pdf), 1000)
+
+    @unittest.skipUnless(CAN_READ_PDF and HAS_PDFLATEX, "needs pdftotext and pdflatex")
+    def test_every_figure_of_the_text_is_in_the_pdf_made_from_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            md, pdf = os.path.join(tmp, "a.md"), os.path.join(tmp, "a.pdf")
+            with open(md, "w", encoding="utf-8") as fh:
+                fh.write("## 1 Results\n\nCO₂ fell 5% to 0.50 in 2020, with α = 0.05.\n\n"
+                         "- 1,200 people in 14 firms\n\n```text\n38  90\n```\n")
+            r = run(sys.executable, script("convert.py"), md, "-o", pdf)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(convert.figures_missing_from_pdf(read(md), pdf), [])
+
+    def test_without_an_engine_it_says_what_to_do(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "a.md")
+            with open(md, "w", encoding="utf-8") as fh:
+                fh.write("Some text.\n")
+            r = run(sys.executable, script("convert.py"), md, "-o", os.path.join(tmp, "a.pdf"),
+                    env=dict(os.environ, PATH=tmp))
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("Overleaf", r.stderr)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "a.tex")))
+            r = run(sys.executable, script("convert.py"), PAPER_PDF, "-o", os.path.join(tmp, "b.pdf"))
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("goes to text first", r.stderr)
 
 
 class ModelDir(unittest.TestCase):

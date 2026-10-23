@@ -307,6 +307,15 @@ def protect(p):
         elif c == "~":
             out.append(" ")
             i += 1
+        elif two == "\\ ":  # a control space («e.g.\ the») reads as a space
+            out.append(" ")
+            i += 2
+        elif re.match(r"\\verb\*?[^a-zA-Z\s*]", text[i:]):  # \verb|x| up to its delimiter
+            m = re.match(r"\\verb\*?(.)", text[i:])
+            j = text.find(m.group(1), i + m.end())
+            j = len(text) if j < 0 else j + 1
+            out.append(piece(text[i:j]))
+            i = j
         elif c == "\\":
             j = command_end(text, i)
             out.append(piece(text[i:j]))
