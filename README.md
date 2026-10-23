@@ -236,8 +236,13 @@ Qwen3-4B-Base.Q8_0.gguf` (after `pip install -r ~/llama.cpp/requirements/require
 
 **A bigger model.** The authors published HIP adapters for Qwen3 0.6B, 1.7B, 4B, 8B and 14B
 (and Llama-3 8B and 70B), each trained for its own base model: the adapter and the model must
-match. The step up is Qwen3-8B-Base, which should follow the original more closely than the 4B
-(not measured here: every measurement in this repo is of the 4B). Example, on Ubuntu:
+match. A bigger model is not clearly better: the paper finds that from 4B up the trade-off
+between meaning kept and detectors passed shifts only modestly, «not necessarily for the
+better» (the 70B is slightly steadier in meaning than the 8B, with a similar trade-off), and
+that HIP needs only a model large enough to paraphrase well; the smaller ones (0.6B, 1.7B) are
+below that. So Qwen3-4B-Base, the default, is the sensible choice. Take a Base adapter, never
+one of the «Instruct» ones (chat training is what detectors recognize). To try Qwen3-8B-Base
+anyway, on Ubuntu (not measured here: every measurement in this repo is of the 4B):
 
 ```bash
 pip install -U huggingface_hub -r ~/llama.cpp/requirements/requirements-convert_lora_to_gguf.txt

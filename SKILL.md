@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. Two pipelines: by default the agent rewrites and scripts guard every paragraph (prose.py export/import: figures, concepts, quotes, references, links, LaTeX placeholders); on request, or for paragraphs a detector still flags, a local base model without chat training rewrites (rewrite.py, join.py --pauses 2, tells.py, candidates), the pipeline measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "4.4.0"
+  version: "4.4.1"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -236,7 +236,7 @@ fails here with its error; if something is missing, it says so.
    not Qwen3-4B and warns if it is the chat model. A Hugging Face folder (`.safetensors`)
    is converted first with llama.cpp's `convert_hf_to_gguf.py`. A bigger base model
    (Qwen3-8B-Base) needs its own adapter too: `HUMANIZE_BASE_MODEL` and `HUMANIZE_ADAPTER`
-   (README, «A bigger model»); it is not measured. It needs network
+   (README, «A bigger model»); it is not measured, and the paper finds little gain over 4B. It needs network
    access; if your environment blocks it, ask for approval or have the user run it in a
    terminal. If the download is cut, run it again: it resumes.
 

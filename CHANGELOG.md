@@ -1,5 +1,12 @@
 # Changelog
 
+## 4.4.1 — October 23, 2026
+
+- README: a bigger model is not claimed to be better. The paper (arXiv:2605.19516, §4.2)
+  finds that from 4B up the meaning-versus-detector trade-off shifts only modestly, not
+  necessarily for the better, and that HIP needs only a model large enough to paraphrase well.
+  Qwen3-4B-Base stays the default; use a Base adapter, never an Instruct one.
+
 ## 4.4.0 — October 23, 2026
 
 **A bigger base model.**
