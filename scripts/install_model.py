@@ -21,8 +21,9 @@ blocked, HF_ENDPOINT points it to a mirror (the same variable huggingface_hub us
 the sha256 check still applies.
 
 It runs on the CPU. HUMANIZE_GPU=1 runs it on the GPU, and this checks that llama.cpp
-sees one: a build for the CPU alone does not (rebuild it with -DGGML_CUDA=ON for NVIDIA,
-or -DGGML_VULKAN=ON for most GPUs; a Mac build uses Metal already).
+sees one: a build for the CPU alone does not (rebuild it with -DGGML_VULKAN=ON for most
+GPUs, NVIDIA included, or -DGGML_CUDA=ON with CUDA 12.8+ for an RTX 50; a Mac build uses
+Metal already).
 
 Then it rewrites one short sentence, so a llama.cpp that rejects a flag or cannot load
 the model fails here, with its error, and not in the middle of a text (--no-test skips it).
@@ -273,8 +274,8 @@ def main():
         print("  runs on: the CPU (HUMANIZE_GPU=1 runs it on a GPU)")
     elif found == []:
         print("  runs on: the CPU\nWARNING: HUMANIZE_GPU is set, but this llama.cpp sees no GPU: "
-              "it was built for the CPU alone. Rebuild it with -DGGML_CUDA=ON (NVIDIA, needs the "
-              "CUDA toolkit) or -DGGML_VULKAN=ON (most GPUs).")
+              "it was built for the CPU alone. Rebuild it with -DGGML_VULKAN=ON (most GPUs, "
+              "NVIDIA included) or -DGGML_CUDA=ON (NVIDIA; an RTX 50 needs CUDA 12.8+).")
     else:
         print("  runs on: the GPU" + (f" ({'; '.join(found)})" if found else ""))
     return 0 if args.no_test else smoke_test()

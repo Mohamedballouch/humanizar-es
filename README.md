@@ -239,9 +239,11 @@ seconds per paragraph; on a few-years-old PC, 1 to 3 minutes.
 
 **Have a GPU?** `export HUMANIZE_GPU=1` runs the model on it, which is much faster. It needs
 about 5 GB of free GPU memory (`HUMANIZE_GPU=20` puts only 20 of the model's 36 layers
-there) and a llama.cpp built for the GPU: `-DGGML_CUDA=ON` for NVIDIA (with the CUDA
-toolkit) or `-DGGML_VULKAN=ON` for most GPUs, added to llama.cpp's `cmake -S . -B build`;
-brew's llama.cpp on a Mac uses Metal already. `install_model.py` then says whether
+there) and a llama.cpp built for the GPU: `-DGGML_VULKAN=ON` for most GPUs, NVIDIA
+included (on Ubuntu, `sudo apt install libvulkan-dev glslc spirv-headers` first), or
+`-DGGML_CUDA=ON` for NVIDIA with the CUDA toolkit (an RTX 50 needs CUDA 12.8 or later, newer
+than some distributions' own package), added to llama.cpp's `cmake -S . -B build`; brew's
+llama.cpp on a Mac uses Metal already. `install_model.py` then says whether
 llama.cpp sees the GPU. It is off by default because on a Mac the GPU froze the screen
 while the model ran. It is the same model either way; the measurements were made on CPU.
 

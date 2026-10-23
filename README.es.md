@@ -239,9 +239,11 @@ por párrafo; en una PC de hace unos años, de 1 a 3 minutos.
 
 **¿Tienes GPU?** `export HUMANIZE_GPU=1` corre el modelo en ella, mucho más rápido. Necesita
 unos 5 GB de memoria de GPU libre (`HUMANIZE_GPU=20` pone solo 20 de las 36 capas del
-modelo) y un llama.cpp compilado para la GPU: `-DGGML_CUDA=ON` para NVIDIA (con el CUDA
-toolkit) o `-DGGML_VULKAN=ON` para la mayoría de las GPU, añadido al `cmake -S . -B build`
-de llama.cpp; el llama.cpp de brew en una Mac ya usa Metal. Después, `install_model.py` dice
+modelo) y un llama.cpp compilado para la GPU: `-DGGML_VULKAN=ON` para la mayoría de las
+GPU, NVIDIA incluida (en Ubuntu, antes `sudo apt install libvulkan-dev glslc spirv-headers`),
+o `-DGGML_CUDA=ON` para NVIDIA con el CUDA toolkit (una RTX 50 necesita CUDA 12.8 o posterior,
+más nuevo que el paquete de algunas distribuciones), añadido al `cmake -S . -B build` de
+llama.cpp; el llama.cpp de brew en una Mac ya usa Metal. Después, `install_model.py` dice
 si llama.cpp ve la GPU. Viene apagado porque en una Mac la GPU trababa la pantalla mientras
 corría el modelo. Es el mismo modelo en los dos casos; las mediciones se hicieron en CPU.
 
