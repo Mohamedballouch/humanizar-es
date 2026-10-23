@@ -57,11 +57,15 @@ class Check(unittest.TestCase):
         self.assertIn("2-final.txt                    27/27 = 100%", r.stdout)
         self.assertEqual(r.returncode, 0, r.stdout)
 
-    def test_english_example_keeps_every_concept(self):
+    def test_english_example_keeps_every_concept_and_shows_its_added_figure(self):
         r = run(sys.executable, script("check.py"),
                 ORIGINAL_EN, REWRITTEN_EN, FINAL_EN, "--concepts", CONCEPTS_EN)
-        self.assertEqual(r.returncode, 0, r.stdout)
         self.assertNotIn("LOST", r.stdout)
+        # «global pandemic» became «COVID-19 pandemic»: a detail the original never gave
+        self.assertIn("1-rewritten.txt: added 19", r.stdout)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        r = run(sys.executable, script("check.py"), ORIGINAL, REWRITTEN, FINAL, "--concepts", CONCEPTS)
+        self.assertIn("FIGURES: all 2 of the original are in every version, none added.", r.stdout)
 
     def test_detects_lost_concept_and_flipped_negation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -114,9 +118,8 @@ class Check(unittest.TestCase):
             with open(b, "w", encoding="utf-8") as fh:
                 fh.write("In 2020, sixty percent of the 1990 staff moved home.\n")
             r = run(sys.executable, script("check.py"), a, b, "--concepts", conc)
-            self.assertIn("FIGURES from the original", r.stdout)
-            self.assertIn("b.txt: 60", r.stdout)
-            self.assertNotIn("1,990", r.stdout.split("FIGURES")[1])
+            self.assertIn("FIGURES that changed", r.stdout)
+            self.assertIn("b.txt: lost 60\n", r.stdout)  # 1,990 = 1990, 2020 stays
 
     def test_a_lost_negation_is_not_hidden_by_the_same_pair_elsewhere(self):
         lost = check.negations("No es fácil. Pero no es imposible.") - check.negations(
@@ -138,6 +141,17 @@ class Check(unittest.TestCase):
             self.assertNotIn("\ufeff", r.stdout)
             r = run(sys.executable, script("tells.py"), a)
             self.assertIn("stock opening", r.stdout)
+
+    def test_figures_are_counted_compared_by_value_and_never_added(self):
+        self.assertEqual(check.numbers_lost("In 2020 and again in 2020.", "In 2020."), ["2020"])
+        self.assertEqual(check.numbers_lost("From 1.5 to 0.50.", "From 15 to 0.5."), ["1.5", "0.50"])
+        self.assertEqual(check.numbers_lost("Hubo 1.990 votos, el 0,05.", "1990 votos; el 0.05."), [])
+        self.assertEqual(check.numbers_lost("Siglo XX, Fase II.", "Siglo X, fase 2."), ["XX", "II"])
+        self.assertEqual(check.numbers_lost("ML and CV methods.", "Learning methods."), [])
+        self.assertEqual(check.numbers_added("Two or three days.", "2 or 3 days, 35% of staff."),
+                         ["35"])
+        self.assertEqual(check.numbers_added("Sixty percent agreed.", "60% agreed."), [])
+        self.assertEqual(check.numbers_added("Dos o tres días.", "2 o 3 días."), [])
 
     def test_missing_file_exits_with_two(self):
         r = run(sys.executable, script("check.py"), ORIGINAL, "does-not-exist.txt")
@@ -321,6 +335,16 @@ class Join(unittest.TestCase):
                          "It ran in 1990—2000 and from 1939 – 1945, mostly.")
         self.assertEqual(join.replace_dashes("Pros:\n— fast\n— cheap"), "Pros:\n— fast\n— cheap")
         self.assertEqual(join.replace_dashes("Pros: — fast"), "Pros: fast")
+
+    def test_joining_never_changes_a_figure(self):
+        texts = [read(f) for f in (ORIGINAL, REWRITTEN, ORIGINAL_EN, REWRITTEN_EN)]
+        texts.append("Accuracy was 0.50 in 2020. It rose to 0.75 by 2021. The 3 models used "
+                     "1,200 samples. Step 2. Then 3.5% more. Fig. 4 shows it. In 1990–2000 "
+                     "the rate was 7. The rest was 12.")
+        for t in texts:
+            for kw in ({}, {"pauses": 2}, {"no_dashes": True}, {"pauses": 1, "no_dashes": True}):
+                out = join.join_text(t, **kw)
+                self.assertEqual(check.figures(out)[0], check.figures(t)[0], kw)
 
     def test_detects_the_language(self):
         self.assertEqual(join.detect_language(read(ORIGINAL)), "es")
@@ -712,6 +736,16 @@ class Rewrite(unittest.TestCase):
         self.assertEqual(out, "- Faster page now load quicker thanks to smarter image caching.\n"
                               "- Fast setup\n")
 
+    def test_a_try_that_adds_or_changes_a_figure_is_never_used(self):
+        text = "Accuracy reached 0.50 on the test set after training for many more epochs.\n"
+        bad = [" 0.5 on the test set once training ran for many further epochs.",
+               " 0.50 on the test set in 2021 once training ran for many further epochs."]
+        good = " 0.50 on the test set once training ran for many further epochs."
+        r, out, _ = self._run_scripted(text, {"Accuracy reached": bad + [good]}, "--tries", "3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(out.strip(), "Accuracy reached" + good)
+        self.assertIn("done, try 3", r.stdout)
+
     def _echo_llama(self, tmp):
         """A fake llama that writes back a different, faithful version each call."""
         for f in (rewrite.BASE, rewrite.ADAPTER):
@@ -729,7 +763,7 @@ class Rewrite(unittest.TestCase):
                 "open(c, 'w').write(str(n))\n"
                 "words = ['la semilla crece despacio', 'el árbol nace de la semilla',\n"
                 "         'de la semilla sale un árbol']\n"
-                "body = ' ' + words[n % 3] + ' y el lead fue ' + lead.replace(' ', '_') + ' en la vuelta ' + str(n) + ' del bosque.'\n"
+                "body = ' ' + words[n % 3] + ' y el lead fue ' + lead.replace(' ', '_') + ' en la vuelta ' + 'abcdefghijklmnopqrst'[n] + ' del bosque.'\n"
                 "sys.stdout.buffer.write((body + '\\n</target_text>').encode('utf-8'))\n")
         return fake
 

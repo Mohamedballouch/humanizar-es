@@ -203,10 +203,12 @@ EMOJI = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF\u2B50\u2B06\u2934\u2935]
 BOLD = re.compile(r"\*\*[^*\n]+\*\*|__[^_\n]+__")
 
 
-def formatting(block):
+def formatting(block, fmt="text"):
     """Markup that marks AI text as much as its words: a bold label on every item, bold
     sprinkled in prose, emojis in headings and lists, arrows, Title Case Headings. This is
     the one kind of tell to fix by hand: removing markup adds no words."""
+    if fmt == "latex":
+        return []
     k = blocks.kind(block)
     hits = []
     if k == "list":
@@ -261,20 +263,20 @@ def suggested_lead(paragraph, lang="en"):
     return lead[0].upper() + lead[1:]
 
 
-def paragraphs_of(text):
-    return blocks.split(text)
+def paragraphs_of(text, fmt="text"):
+    return blocks.parse(text, fmt)[1]
 
 
 def is_title(p):
     return len(p.split()) <= 12 and not p.rstrip().endswith((".", "!", "?", "…", ":"))
 
 
-def report(paragraphs, lang):
+def report(paragraphs, lang, fmt="text"):
     """[(number, score, hits)] for the paragraphs that are prose or lists and not titles;
-    code, tables, headings and quotations are not the author's prose."""
+    code, tables, headings and quotations are not the author's prose, nor LaTeX's math."""
     out = []
     for i, p in enumerate(paragraphs, 1):
-        prose = blocks.prose_of(p)
+        prose = blocks.prose_of(p, fmt)
         if not prose or is_title(p):
             continue
         hits = find(prose, lang)
@@ -299,9 +301,10 @@ def main():
     except OSError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
-    last_blocks = paragraphs_of(texts[-1])
-    lang = args.lang or join.detect_language(" ".join(blocks.prose_of(b) for b in last_blocks))
-    reports = [report(paragraphs_of(t), lang) for t in texts]
+    fmts = [blocks.format_of(f) for f in args.files]
+    last_blocks, fmt = paragraphs_of(texts[-1], fmts[-1]), fmts[-1]
+    lang = args.lang or join.detect_language(" ".join(blocks.prose_of(b, fmt) for b in last_blocks))
+    reports = [report(paragraphs_of(t, f), lang, f) for t, f in zip(texts, fmts)]
     last, name = reports[-1], args.files[-1]
 
     print(f"Tells of AI writing in {name} (language: {lang}; 3 = strong, 2 = stock word, "
@@ -323,15 +326,16 @@ def main():
           "two stock words, or 6 points).")
     if to_redo:
         only = ",".join(str(i) for i, _ in to_redo)
+        ext = ".tex" if fmt == "latex" else ".txt"
         print("Don't fix them by hand: regenerate them from the original and keep the candidate\n"
               "with the fewest tells that still says everything (the rewrite before join.py):\n"
-              "  python3 scripts/rewrite.py 00-original.txt -o 01-rewritten.txt "
+              f"  python3 scripts/rewrite.py 00-original{ext} -o 01-rewritten{ext} "
               f"--concepts concepts.txt --only {only} --candidates 6")
         for i, _ in to_redo:
-            lead = suggested_lead(blocks.prose_of(last_blocks[i - 1]), lang)
+            lead = suggested_lead(blocks.prose_of(last_blocks[i - 1], fmt), lang)
             if lead:
                 print(f"  ¶{i} opens with a stock connector; add --lead \"{lead}\" for that one.")
-    markup = [(i, formatting(b)) for i, b in enumerate(last_blocks, 1)]
+    markup = [(i, formatting(b, fmt)) for i, b in enumerate(last_blocks, 1)]
     markup = [(i, h) for i, h in markup if h]
     if markup:
         print("\nFormatting tells (these you may fix by hand: removing markup adds no words):")

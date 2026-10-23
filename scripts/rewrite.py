@@ -18,10 +18,18 @@ more than --max-copied of its words in runs of 8+ words is retried too, and if e
 try copies that much, the least copied one is kept and a warning is printed. A try
 that drops a figure of the original (a year, an amount) is retried; if all do, the one
 missing the fewest is kept and the warning names the figure to put back (a one-word fix).
+A try that adds a figure the original never had, or changes one («0.50» -> «0.5», «1.5»
+-> «15»), is never used.
 A try that changes a URL, a link or `inline code` is never used.
 
 Markdown is respected: code, tables, headings, quotations and HTML are kept as they are,
 and a list is rewritten item by item, keeping its markers (scripts/blocks.py).
+
+A LaTeX paper (.tex) is rewritten paragraph by paragraph too: the preamble, sections,
+equations, figures, tables, theorems, comments and bibliography are kept byte for byte,
+and inside a paragraph the model sees placeholders for math, citations, references and
+every other command (scripts/latex.py). A try that loses, repeats or adds a placeholder is
+not used, so $\\beta$, \\cite{…} or \\ref{…} cannot change.
 
 Runs on CPU (-ngl 0) at low priority. About 30 s per paragraph on an M4 Mac.
 Install first: python3 scripts/install_model.py  (about 4.6 GB in ~/.cache/humanizar-es/hip)
@@ -46,6 +54,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocks  # noqa: E402
 import check  # noqa: E402
 import join  # noqa: E402
+import latex  # noqa: E402
 import tells  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on «» or ñ
@@ -284,6 +293,7 @@ def markup_problem(original, rewritten):
 
 
 numbers_lost = check.numbers_lost  # a try that drops a year or an amount is retried
+numbers_added = check.numbers_added  # a try that invents one is never used
 
 
 # Problems that still leave a usable try, best first: if every try has one, the best is
@@ -304,6 +314,8 @@ def acceptable(p, r, wanted, concepts, max_copied, max_tells=None, lang="en"):
     problem = citation_problem(p, r) or markup_problem(p, r)
     if problem:
         return problem, 0.0
+    if numbers_added(p, r):
+        return "(figure added)", 0.0
     share = copied_share(p, r)
     if share > max_copied:
         return "(copied)", share
@@ -373,9 +385,10 @@ def main():
     with open(args.original, encoding="utf-8-sig") as fh:
         text = fh.read()
     concepts = check.load_concepts(args.concepts) if args.concepts else []
-    paragraphs = blocks.split(text)
-    lang = join.detect_language(" ".join(blocks.prose_of(b) for b in paragraphs))
-    kept, only = None, None
+    args.fmt = blocks.format_of(args.original)
+    frame, paragraphs = blocks.parse(text, args.fmt)
+    lang = join.detect_language(" ".join(blocks.prose_of(b, args.fmt) for b in paragraphs))
+    kept, kept_frame, only = None, None, None
     if args.only:
         only = parse_only(args.only, len(paragraphs))
         if only is None:
@@ -384,13 +397,13 @@ def main():
             print(f"ERROR: --only needs the existing {args.output}", file=sys.stderr)
             return 2
         with open(args.output, encoding="utf-8-sig") as fh:
-            kept = blocks.split(fh.read())
+            kept_frame, kept = blocks.parse(fh.read(), args.fmt)
         if len(kept) != len(paragraphs):
             print(f"ERROR: {args.output} has {len(kept)} paragraphs and the original "
                   f"{len(paragraphs)}; --only needs the same count", file=sys.stderr)
             return 2
     try:
-        return run_paragraphs(args, paragraphs, kept, only, concepts, lang)
+        return run_paragraphs(args, kept_frame or frame, paragraphs, kept, only, concepts, lang)
     except LlamaError as e:
         print(f"ERROR: {e}\nThe paragraphs finished before it are saved in {args.output}. "
               "Check that llama.cpp runs: " + HOW_TO_INSTALL_LLAMA, file=sys.stderr)
@@ -413,23 +426,45 @@ def parse_only(spec, count):
     return only
 
 
+def one_try(p, args, concepts, lang, lead=None):
+    """(problem, copied share, text, (plain p, plain try)) for one model call on paragraph
+    or item p. In LaTeX the model sees the prose with placeholders; a try that breaks one
+    is «(LaTeX changed)», and the text returned is the try put back in LaTeX. The checks
+    read the plain prose, so a placeholder's number is not taken for a figure."""
+    if getattr(args, "fmt", "text") == "latex":
+        visible, pieces = latex.protect(p)
+        plain_p = latex.strip_placeholders(visible)
+    else:
+        visible, pieces, plain_p = p, None, p
+    r = restore_percent_signs(visible, rewrite_paragraph(visible, args.threads, args.temperature,
+                                                         lead, lang))
+    if pieces is None:
+        text, plain_r = r, r
+    else:
+        text = None if latex.problem(visible, r, pieces) else latex.restore(r, pieces)
+        if text is None:
+            return "(LaTeX changed)", 0.0, None, None
+        plain_r = latex.strip_placeholders(r)
+    problem, share = acceptable(plain_p, plain_r, concepts_in(plain_p, concepts), concepts,
+                                args.max_copied, args.max_tells, lang)
+    return problem, share, text, (plain_p, plain_r)
+
+
 def rewrite_unit(p, args, concepts, lang, lead=None):
     """One paragraph or list item through its tries: (text, tries used, fallback, lost).
     fallback is the soft problem of a kept try that was not clean (None if it was);
     lost counts the problems of the tries when the original had to be kept. --lead is
     for paragraphs: every item of a list opening with the same words would be a tell."""
-    wanted = concepts_in(p, concepts)
     soft, lost = [], collections.Counter()
     for n in range(1, args.tries + 1):
-        r = restore_percent_signs(p, rewrite_paragraph(p, args.threads, args.temperature,
-                                                       lead, lang))
-        problem, share = acceptable(p, r, wanted, concepts, args.max_copied, args.max_tells, lang)
+        problem, share, text, plain = one_try(p, args, concepts, lang, lead)
         if problem is None:
-            return r, n, None, lost
+            return text, n, None, lost
         if problem in SOFT:
-            metric = (tells.score(r, lang) if problem == "(AI tells)" else
-                      len(numbers_lost(p, r)) if problem == "(number changed)" else share)
-            soft.append((SOFT.index(problem), metric, r, problem))
+            pp, pr = plain
+            metric = (tells.score(pr, lang) if problem == "(AI tells)" else
+                      len(numbers_lost(pp, pr)) if problem == "(number changed)" else share)
+            soft.append((SOFT.index(problem), metric, text, problem))
         else:
             lost[problem] += 1
     if soft:
@@ -438,8 +473,10 @@ def rewrite_unit(p, args, concepts, lang, lead=None):
     return p, args.tries, None, lost
 
 
-def note(report, label, p, text, fallback, lost, lang):
+def note(report, label, p, text, fallback, lost, lang, fmt="text"):
     """Adds what the user has to look at for one paragraph or item to the report."""
+    if fallback and fmt == "latex":
+        p, text = latex.plain(p), latex.plain(text)
     if fallback == "(copied)":
         report["copied"].append(f"{label} ({copied_share(p, text):.0%})")
     elif fallback == "(AI tells)":
@@ -453,45 +490,48 @@ def note(report, label, p, text, fallback, lost, lang):
 def rewrite_block(i, p, args, concepts, lang, report):
     """(rewritten block, status) for block i. Code, tables, headings, quotations and
     titles stay; a list is rewritten item by item and keeps its markers."""
-    k = blocks.kind(p)
+    fmt = getattr(args, "fmt", "text")
+    k = blocks.kind(p, fmt)
     if k not in blocks.PROSE or (k == "prose" and is_title(p)):
         return p, f"kept ({'title' if k == 'prose' else k})"
     if k == "list":
-        pairs, done = [], 0
-        for j, (marker, item) in enumerate(blocks.items(p), 1):
+        pairs, done, count = [], 0, 0
+        for j, (marker, item) in enumerate(blocks.items(p, fmt), 1):
+            count += bool(item)
             if short_item(item):
                 pairs.append((marker, item))
                 continue
             text, _, fallback, lost = rewrite_unit(item, args, concepts, lang)
-            note(report, f"{i}.{j}", item, text, fallback, lost, lang)
+            note(report, f"{i}.{j}", item, text, fallback, lost, lang, fmt)
             done += text != item
             pairs.append((marker, text))
-        return blocks.rebuild(pairs), f"list, {done} of {len(pairs)} items rewritten"
+        return blocks.rebuild(pairs, fmt), f"list, {done} of {count} items rewritten"
     text, n, fallback, lost = rewrite_unit(p, args, concepts, lang, args.lead)
-    note(report, str(i), p, text, fallback, lost, lang)
+    note(report, str(i), p, text, fallback, lost, lang, fmt)
     status = ("unchanged" if text == p else f"done, {FALLBACK_STATUS[fallback]} {n} tries"
               if fallback else f"done, try {n}" if n > 1 else "done")
     return text, status
 
 
-def run_paragraphs(args, paragraphs, kept, only, concepts, lang):
+def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
     output, t0 = [], time.time()
+    fmt = getattr(args, "fmt", "text")
     report = {"untouched": [], "copied": [], "tells": [], "numbers": []}
     for i, p in enumerate(paragraphs, 1):
         if kept is not None and i not in only:
             output.append(kept[i - 1])
             continue
         if args.candidates:
-            if blocks.kind(p) in blocks.PROSE and not is_title(p):
+            if blocks.kind(p, fmt) in blocks.PROSE and not is_title(p):
                 write_candidates(args, i, p, concepts, lang)
             else:
-                print(f"Paragraph {i}: no candidates for a {blocks.kind(p)} or a title")
+                print(f"Paragraph {i}: no candidates for a {blocks.kind(p, fmt)} or a title")
             output.append(kept[i - 1])
             continue
         text, status = rewrite_block(i, p, args, concepts, lang, report)
         output.append(text)
         with open(args.output, "w", encoding="utf-8") as fh:  # saves after every paragraph
-            fh.write("\n\n".join(output + (kept or paragraphs)[i:]) + "\n")
+            fh.write(blocks.unparse(frame, output + (kept or paragraphs)[i:]))
         print(f"Paragraph {i} of {len(paragraphs)}: {status} ({time.time() - t0:.0f} s)", flush=True)
 
     if args.candidates:
@@ -515,8 +555,9 @@ def run_paragraphs(args, paragraphs, kept, only, concepts, lang):
               "kept: " + "; ".join(report["tells"]) + ".")
     strong = []
     for n, x in enumerate(output, 1):
-        if (only is None or n in only) and blocks.prose_of(x) and not is_title(x):
-            hits = tells.find(blocks.prose_of(x), lang)
+        prose = blocks.prose_of(x, fmt)
+        if (only is None or n in only) and prose and not is_title(x):
+            hits = tells.find(prose, lang)
             if tells.flagged(hits):
                 strong.append(f"{n} ({tells.summary(hits)})")
     if strong:
@@ -531,22 +572,20 @@ def run_paragraphs(args, paragraphs, kept, only, concepts, lang):
 def one_candidate(p, args, concepts, lang):
     """(text, copied share) of one acceptable version of block p, or None. A list gets
     each item rewritten; a candidate with an item left as the original is not one."""
-    if blocks.kind(p) == "list":
+    fmt = getattr(args, "fmt", "text")
+    if blocks.kind(p, fmt) == "list":
         pairs = []
-        for marker, item in blocks.items(p):
+        for marker, item in blocks.items(p, fmt):
             if not short_item(item):
                 text, _, fallback, _ = rewrite_unit(item, args, concepts, lang)
                 if text == item or fallback:
                     return None
                 item = text
             pairs.append((marker, item))
-        r = blocks.rebuild(pairs)
+        r = blocks.rebuild(pairs, fmt)
         return r, copied_share(p, r)
-    r = restore_percent_signs(p, rewrite_paragraph(p, args.threads, args.temperature,
-                                                   args.lead, lang))
-    problem, share = acceptable(p, r, concepts_in(p, concepts), concepts, args.max_copied,
-                                args.max_tells, lang)
-    return None if problem else (r, share)
+    problem, share, text, _ = one_try(p, args, concepts, lang, args.lead)
+    return None if problem else (text, share)
 
 
 def write_candidates(args, i, p, concepts, lang="en"):
@@ -563,10 +602,11 @@ def write_candidates(args, i, p, concepts, lang="en"):
             continue
         r, share = got
         found += 1
-        path = os.path.join(folder, f"p{i:02d}-{found}.txt")
+        ext = ".tex" if getattr(args, "fmt", "text") == "latex" else ".txt"
+        path = os.path.join(folder, f"p{i:02d}-{found}{ext}")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(r + "\n")
-        hits = tells.find(blocks.prose_of(r), lang)
+        hits = tells.find(blocks.prose_of(r, getattr(args, "fmt", "text")), lang)
         score = sum(w for _, w, _ in hits)
         written.append((score, path))
         print(f"Paragraph {i}: {path} (copied {share:.0%}, tells {score}"
@@ -586,10 +626,11 @@ def take(original, output, spec):
     if not n.isdigit() or not os.path.isfile(path):
         print("ERROR: --take needs N=FILE with an existing FILE", file=sys.stderr)
         return 2
+    fmt = blocks.format_of(original)
     with open(output, encoding="utf-8-sig") as fh:
-        paragraphs = blocks.split(fh.read())
+        frame, paragraphs = blocks.parse(fh.read(), fmt)
     with open(original, encoding="utf-8-sig") as fh:
-        count = len(blocks.split(fh.read()))
+        count = len(blocks.parse(fh.read(), fmt)[1])
     if count != len(paragraphs):
         print(f"ERROR: {output} has {len(paragraphs)} paragraphs and the original {count}; "
               "--take needs the same count", file=sys.stderr)
@@ -599,10 +640,12 @@ def take(original, output, spec):
         return 2
     with open(path, encoding="utf-8-sig") as fh:
         new = fh.read().strip()
-    # a list keeps its lines; a paragraph is one line, as rewrite.py writes it
-    paragraphs[int(n) - 1] = new if blocks.kind(new) == "list" else " ".join(new.split())
+    # a list keeps its lines, and LaTeX its comments' line ends; a paragraph of text is one
+    # line, as rewrite.py writes it
+    keep_lines = fmt == "latex" or blocks.kind(new) == "list"
+    paragraphs[int(n) - 1] = new if keep_lines else " ".join(new.split())
     with open(output, "w", encoding="utf-8") as fh:
-        fh.write("\n\n".join(paragraphs) + "\n")
+        fh.write(blocks.unparse(frame, paragraphs))
     print(f"Paragraph {n} of {output} now comes from {path}")
     return 0
 

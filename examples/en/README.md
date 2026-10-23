@@ -22,8 +22,10 @@ One fix. The model added a claim the original didn't make:
 |---|---|---|
 | Millions of workers **have been forced to work** from home | Millions of workers **now work** from home | the original said they *split their time*, not that they were forced |
 
-Things left as they were because they say the same thing in other words: "COVID-19
-pandemic" for "global pandemic", "wellness" for "well-being", "sleeping" for "rest".
+Things left as they were because they say the same thing in other words: "wellness" for
+"well-being", "sleeping" for "rest". "COVID-19 pandemic" for "global pandemic" was left too,
+but it names something the original did not: since 3.4.0 `check.py` reports it as an added
+figure ("added 19") and exits with 1, and `rewrite.py` would not have used that try.
 
 `check.py` kept 13 of 13 concepts. `join.py` turned 24 sentences into 7, and left out
 the "Moreover," that opened a sentence (since 3.2.0).

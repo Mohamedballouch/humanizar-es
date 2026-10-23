@@ -13,15 +13,43 @@ list is handled item by item with its markers.
   items(block)      -> [(marker, text), ...] for a list
   rebuild(items)    -> the list again, from (marker, text) pairs
 
+A LaTeX file (.tex) is read by scripts/latex.py instead: parse(text, "latex") gives the
+paragraphs of prose and a frame with everything else, kept byte for byte, and
+unparse(frame, paragraphs) puts the file back together. Every function here takes that
+format as its last argument.
+
 Standard library only.
 """
+import os
 import re
+
+import latex
 
 FENCE = re.compile(r"^\s*(```|~~~)")
 MARKER = re.compile(r"^(\s*(?:[-*+•]|\d{1,3}[.)])\s+(?:\[[ xX]\]\s+)?)(.*)$")
 HEADING = re.compile(r"^#{1,6}\s")
 RULE = re.compile(r"^\s*(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$")
 PROSE = ("prose", "list")  # the kinds that are rewritten, joined and scanned
+
+
+def format_of(path):
+    """«latex» for a .tex file, «text» for anything else (plain text or Markdown)."""
+    return "latex" if os.path.splitext(path)[1].lower() in (".tex", ".latex", ".ltx") else "text"
+
+
+def parse(text, fmt="text"):
+    """(frame, paragraphs): unparse(frame, paragraphs) writes the file back. For text, the
+    frame is the blank line between paragraphs; for LaTeX, everything that is not prose."""
+    if fmt == "latex":
+        return latex.parse(text)
+    paras = split(text)
+    if not paras:
+        return [text], []
+    return [""] + ["\n\n"] * (len(paras) - 1) + ["\n"], paras
+
+
+def unparse(frame, paragraphs):
+    return latex.unparse(frame, paragraphs)
 
 
 def split(text):
@@ -64,7 +92,9 @@ def _is_code(block):
         len(lines) > 1 and all(ln.startswith(("    ", "\t")) for ln in lines)))
 
 
-def kind(block):
+def kind(block, fmt="text"):
+    if fmt == "latex":
+        return "list" if latex.is_list(block) else "prose"
     lines = [ln for ln in block.split("\n") if ln.strip()]
     if not lines:
         return "prose"
@@ -91,8 +121,10 @@ def kind(block):
     return "prose"
 
 
-def items(block):
+def items(block, fmt="text"):
     """(marker, text) for each item; a line that continues an item joins its text."""
+    if fmt == "latex":
+        return latex.items(block)
     out = []
     for line in block.split("\n"):
         if not line.strip():
@@ -107,14 +139,17 @@ def items(block):
     return [(marker, text) for marker, text in out]
 
 
-def rebuild(pairs):
+def rebuild(pairs, fmt="text"):
+    if fmt == "latex":
+        return latex.rebuild(pairs)
     return "\n".join(marker + text for marker, text in pairs)
 
 
-def prose_of(block):
-    """The text a reader reads in a prose or list block, without the list markers; ""
-    for blocks that are not prose."""
-    k = kind(block)
-    if k == "list":
-        return "\n".join(text for _, text in items(block))
-    return block if k == "prose" else ""
+def prose_of(block, fmt="text"):
+    """The text a reader reads in a prose or list block, without the list markers (and,
+    in LaTeX, without commands and math); "" for blocks that are not prose."""
+    k = kind(block, fmt)
+    texts = [t for _, t in items(block, fmt)] if k == "list" else [block] if k == "prose" else []
+    if fmt == "latex":
+        texts = [latex.strip_placeholders(latex.protect(t)[0]) for t in texts]
+    return "\n".join(t for t in texts if t)

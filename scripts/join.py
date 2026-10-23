@@ -11,7 +11,9 @@ enough (57%).
 
 Respects proper nouns: it does not lowercase them if they are in --concepts or if
 they appear capitalized mid-sentence in the text. Markdown code, tables, headings and
-quotations are left as they are; list items are joined one by one.
+quotations are left as they are; list items are joined one by one. In a LaTeX file
+(.tex) only the prose is joined: math, citations, references and every command are held as
+placeholders (scripts/latex.py), and everything outside the paragraphs stays byte for byte.
 
 usage:
   python3 scripts/join.py rewritten.txt -o final.txt --concepts concepts.txt
@@ -25,6 +27,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocks  # noqa: E402
 import check  # noqa: E402
+import latex  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on «» or ñ
     sys.stdout.reconfigure(errors="replace")
@@ -280,31 +283,40 @@ def join_with_pauses(paragraph, proper, pauses, rnd, doubtful=None, lang="es"):
 
 
 def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, lang=None,
-              pauses=None, no_dashes=False):
+              pauses=None, no_dashes=False, fmt="text"):
     """doubtful: if it is a list, it receives the words that were lowercased without
     appearing that way anywhere else in the text (possible proper nouns).
-    lang: "es", "en" or None to detect it. no_dashes: dashes between words become commas."""
-    paragraphs = blocks.split(text)
-    lang = lang or detect_language(" ".join(blocks.prose_of(x) for x in paragraphs))
+    lang: "es", "en" or None to detect it. no_dashes: dashes between words become commas.
+    fmt: "text" (plain text or Markdown) or "latex"."""
+    frame, paragraphs = blocks.parse(text, fmt)
+    lang = lang or detect_language(" ".join(blocks.prose_of(x, fmt) for x in paragraphs))
     c = LANGUAGES[lang]
     rnd = random.Random(seed)
-    proper = proper_nouns(text, concepts, lang)
+    proper = proper_nouns(latex.plain(text) if fmt == "latex" else text, concepts, lang)
     lowered = []
 
-    def one(x):
+    def prose(x):
         x = replace_dashes(x) if no_dashes else x
         if pauses:
             return join_with_pauses(x, proper, pauses, rnd, lowered, lang)
         return join_paragraph(x, proper, p, rnd, max_words, lowered, lang)
 
+    def one(x):
+        if fmt != "latex":
+            return prose(x)
+        visible, pieces = latex.protect(x)
+        joined = prose(visible)
+        return x if joined == visible else (latex.restore(joined, pieces) or x)
+
     out = []
     for x in paragraphs:
-        k = blocks.kind(x)
+        k = blocks.kind(x, fmt)
         if k == "list":
-            out.append(blocks.rebuild([(m, one(t)) for m, t in blocks.items(x)]))
+            out.append(blocks.rebuild([(m, one(t) if t else t) for m, t in blocks.items(x, fmt)],
+                                      fmt))
         else:
             out.append(one(x) if k == "prose" else x)
-    output = "\n\n".join(out) + "\n"
+    output = blocks.unparse(frame, out)
     if doubtful is not None:
         words = set(re.findall(r"\w+", text))
         doubtful.extend(sorted({w for w in lowered if w.lower() not in words
@@ -336,9 +348,11 @@ def main():
         text = fh.read()
     concepts = check.load_concepts(args.concepts) if args.concepts else []
     doubtful = []
-    lang = args.lang or detect_language(text)
+    fmt = blocks.format_of(args.input)
+    lang = args.lang or detect_language(" ".join(blocks.prose_of(x, fmt)
+                                                 for x in blocks.parse(text, fmt)[1]))
     joined = join_text(text, concepts, args.ratio, max_words=args.max_words, doubtful=doubtful,
-                       lang=lang, pauses=args.pauses, no_dashes=args.no_dashes)
+                       lang=lang, pauses=args.pauses, no_dashes=args.no_dashes, fmt=fmt)
     with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(joined)
     count = lambda t: len(re.findall(r"[.!?](?:\s|$)", t))  # noqa: E731

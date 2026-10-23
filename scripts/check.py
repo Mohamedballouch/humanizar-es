@@ -12,8 +12,10 @@ in two ways:
   2. Negations: warns if a negative construction of the original ("no
      contradiction", "never", "without") disappears from the variant. It is the
      most dangerous error: it flips the meaning and no proofreader catches it.
-  3. Figures: warns if a number of the original (a year, an amount, a percentage)
-     is missing from the variant, so «60%» -> «sixty percent» or a dropped year is seen.
+  3. Figures: every number of the original (a year, an amount, a percentage, a decimal
+     with its precision, a roman numeral like «siglo XX») must be in the variant as many
+     times, and the variant must not add one. Both are errors: «60%» -> «sixty percent»,
+     a dropped year, a «0.50» that became «0.5», an invented «35%».
 
 Standard library only.
 
@@ -31,14 +33,18 @@ Concepts file format (one per line, # for comments):
   C#                              <- a # starts a comment only at the start or after a space
 Matching ignores case and accents.
 
-Exit code: 0 if every variant keeps 100% of the concepts, 1 if any loses one,
-2 on a usage error.
+Exit code: 0 if every variant keeps 100% of the concepts and every figure, 1 if any
+loses a concept or loses or adds a figure, 2 on a usage error.
 """
 import argparse
 import collections
+import os
 import re
 import sys
 import unicodedata
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import latex  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on «» or ñ
     sys.stdout.reconfigure(errors="replace")
@@ -148,19 +154,68 @@ def negations(text):
     )
 
 
-NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
+# Figures: numbers in digits, and roman numerals of two or more letters made of I, V and
+# X («siglo XX», «Phase II», «World War II»). ML, CV or DL are not numerals here.
+NUMBER = re.compile(r"\d+(?:[.,]\d+)*|\b(?=[IVX]{2,}\b)X{0,3}(?:IX|IV|V?I{0,3})\b")
+NUMBER_WORDS = {
+    "en": "zero one two three four five six seven eight nine ten eleven twelve thirteen "
+          "fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(),
+    "es": "cero uno dos tres cuatro cinco seis siete ocho nueve diez once doce trece catorce "
+          "quince dieciseis diecisiete dieciocho diecinueve veinte".split(),
+}
+TENS = {"thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70, "eighty": 80,
+        "ninety": 90, "hundred": 100, "thousand": 1000, "million": 1000000, "treinta": 30,
+        "cuarenta": 40, "cincuenta": 50, "sesenta": 60, "setenta": 70, "ochenta": 80,
+        "noventa": 90, "cien": 100, "ciento": 100, "mil": 1000, "millon": 1000000,
+        "una": 1, "un": 1}
+
+
+def figure_key(n):
+    """The value a figure stands for, so the same figure written two ways matches and two
+    different figures never do. Thousands separators go («1,990» = «1.990» = «1990», but
+    only in groups of exactly three digits after a first digit that is not 0); a decimal
+    comma is a decimal point («0,05» = «0.05»); «1.5» and «15» stay different, and so do
+    «0.50» and «0.5», because the precision a paper reports is part of the figure."""
+    if not n[0].isdigit():
+        return n
+    if re.fullmatch(r"[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d{0,2}(?:\.\d{3})+", n):
+        return n.replace(",", "").replace(".", "")
+    return n.replace(",", ".")
+
+
+def figures(text):
+    """Counter of figure values, and the first spelling of each one in the text."""
+    found = NUMBER.findall(text)
+    spelled = {}
+    for n in found:
+        spelled.setdefault(figure_key(n), n)
+    return collections.Counter(figure_key(n) for n in found), spelled
+
+
+def _words_for(text):
+    """Values the text writes out in words («two», «sixty», «veinte»), so that turning a
+    word into digits is not a new figure."""
+    words = set(re.findall(r"[a-z]+", norm(text)))
+    values = {str(i) for lang in NUMBER_WORDS.values() for i, w in enumerate(lang) if w in words}
+    return values | {str(v) for w, v in TENS.items() if w in words}
 
 
 def numbers_lost(original, variant):
-    """Figures of the original missing from the variant, compared without separators so
-    «1,990» and «1990» are the same. Only digits: «two or three days» needs a concept."""
-    key = lambda n: re.sub(r"[.,]", "", n)  # noqa: E731
-    have = {key(n) for n in NUMBER.findall(variant)}
-    lost = []
-    for n in NUMBER.findall(original):
-        if key(n) not in have and n not in lost:
-            lost.append(n)
-    return lost
+    """Figures of the original that the variant has fewer times, once per missing
+    occurrence: «2020» twice in the original and once in the variant is one «2020» lost.
+    Only digits and numerals: «two or three days» is the concepts file's job."""
+    have, _ = figures(variant)
+    want, spelled = figures(original)
+    return [spelled[k] for k, n in (want - have).items() for _ in range(n)]
+
+
+def numbers_added(original, variant):
+    """Figures the variant has more times than the original: an invented year, amount or
+    percentage. A figure the original writes in words («two» -> «2») is not new."""
+    have, spelled = figures(variant)
+    want, _ = figures(original)
+    words = _words_for(original)
+    return [spelled[k] for k, n in (have - want).items() if k not in words for _ in range(n)]
 
 
 def short_name(path, width=18):
@@ -185,6 +240,8 @@ def main():
         for f in [args.original] + args.variants:
             with open(f, encoding="utf-8-sig") as fh:
                 texts[f] = fh.read()
+            if os.path.splitext(f)[1].lower() in (".tex", ".latex", ".ltx"):
+                texts[f] = latex.plain(texts[f])  # accents as letters, 60\% as 60%
         concepts = (
             load_concepts(args.concepts)
             if args.concepts
@@ -257,13 +314,25 @@ def main():
         for f, missing in warnings:
             print(f"  {short_name(f, 30)}: " + ", ".join(f"«{x}»" for x in missing))
 
-    figures = [(f, numbers_lost(texts[args.original], texts[f])) for f in args.variants]
-    figures = [(f, lost) for f, lost in figures if lost]
-    if figures:
-        print("\nFIGURES from the original that are missing (put them back by hand, or check")
-        print("  they were written out on purpose):")
-        for f, lost in figures:
-            print(f"  {short_name(f, 30)}: " + ", ".join(lost))
+    changed = []
+    for f in args.variants:
+        lost = numbers_lost(texts[args.original], texts[f])
+        added = numbers_added(texts[args.original], texts[f])
+        if lost or added:
+            changed.append((f, lost, added))
+    if changed:
+        failed = True
+        print("\nFIGURES that changed (every number of the original must stay as it is):")
+        for f, lost, added in changed:
+            print(f"  {short_name(f, 30)}:"
+                  + (f" lost {', '.join(lost)}" if lost else "")
+                  + (";" if lost and added else "")
+                  + (f" added {', '.join(added)}" if added else ""))
+        print("  Put a lost figure back by hand (a one-word fix); an added one is a detail the\n"
+              "  original never gave: remove it or regenerate that paragraph.")
+    else:
+        n = sum(figures(texts[args.original])[0].values())
+        print(f"\nFIGURES: all {n} of the original are in every version, none added.")
 
     return 1 if failed else 0
 

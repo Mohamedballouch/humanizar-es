@@ -1,0 +1,65 @@
+\documentclass{article}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath}
+% Preamble comment: never touched.
+\title{Remote Work and Team Productivity}
+\author{A. Author}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Remote work has fundamentally reshaped how organizations think about productivity.
+We study 1,200 employees across 14 firms and find that hybrid schedules raise
+self-reported output by 7.5\% while reducing commuting time by 52 minutes per day.
+\end{abstract}
+
+\section{Introduction}\label{sec:intro}
+The rapid expansion of remote work over the past several years has changed the way
+organizations plan collaboration~\cite{smith2020,lee2021}. As shown in
+Fig.~\ref{fig:trend}, adoption grew from 12\% in 2019 to 41\% in 2022. % TODO: update
+Prior work by Mart\'{\i}nez et al.~\cite{martinez2019} measured output with a simple
+model $y = \alpha + \beta x$, where $\beta$ captures the effect of distance.
+
+\begin{figure}[t]
+  \centering
+  \fbox{\parbox{0.8\linewidth}{\centering Adoption, 2019--2022 (figure file not included).}}
+  \caption{Adoption of remote work, 2019--2022.}
+  \label{fig:trend}
+\end{figure}
+
+Our main contributions are:
+\begin{itemize}
+  \item A panel of 1,200 employees observed over 24 months in \emph{14} firms.
+  \item An estimate of the effect of hybrid schedules on output, see Eq.~\eqref{eq:main}.
+\end{itemize}
+
+\section{Method}
+We estimate the following model:
+\begin{equation}
+  y_{it} = \alpha_i + \beta \, \text{hybrid}_{it} + \varepsilon_{it}
+  \label{eq:main}
+\end{equation}
+where $y_{it}$ is the output of employee $i$ in month $t$. Standard errors are
+clustered by firm, and the sample excludes the first 3 months of 2020.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lcc}
+Group & Output & Commute (min) \\
+Hybrid & 1.075 & 38 \\
+Office & 1.000 & 90 \\
+\end{tabular}
+\caption{Main results.}
+\end{table}
+
+\section{Conclusion}
+Ultimately, there is no one-size-fits-all answer. Hybrid schedules raised output by
+7.5\% in our sample, a result that holds across all 14 firms (p < 0.01).
+
+\begin{thebibliography}{9}
+\bibitem{smith2020} J. Smith. Working apart. \emph{J. Org. Stud.}, 12(3):45--67, 2020.
+\bibitem{lee2021} K. Lee. Hybrid teams. In \emph{Proc. CSCW}, pages 1--10, 2021.
+\bibitem{martinez2019} L. Mart\'{\i}nez et al. Distance and output. \emph{Rev. Econ.}, 8:101--119, 2019.
+\end{thebibliography}
+\end{document}
