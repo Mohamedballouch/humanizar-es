@@ -983,6 +983,21 @@ class Installer(unittest.TestCase):
                 fh.write(b"x" * 1000)
             self.assertEqual(install_model.bytes_missing(tmp), install_model.SIZES[rewrite.BASE] - 1000)
 
+    def test_model_installer_smoke_test_reports_a_broken_llama(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "broken_llama.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nsys.stderr.write('error: unknown argument: -dev\\n')\n"
+                         "sys.exit(1)\n")
+            code = ("import sys; sys.path.insert(0, %r); import install_model; "
+                    "sys.exit(install_model.smoke_test())" % SCRIPTS)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, "-c", code, env=env)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("unknown argument: -dev", r.stdout)
+
     def test_model_installer_has_hashes(self):
         s = read(script("install_model.py"))
         self.assertEqual(len(re.findall(r'_SHA = "[0-9a-f]{64}"', s)), 2)

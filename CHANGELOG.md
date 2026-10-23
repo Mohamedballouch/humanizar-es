@@ -20,8 +20,10 @@ rewritten and joined like prose, and a list came back as one run of sentences.
   arrows, Title Case Headings), reported apart because they are the one kind you may fix
   by hand; three sentences in a row opening with the same word; code, tables and headings
   are not scanned as prose.
-- `install_model.py` checks the free space before downloading and honours `HF_ENDPOINT`
-  for a Hugging Face mirror (the sha256 check still applies).
+- `install_model.py` checks the free space before downloading, honours `HF_ENDPOINT` for a
+  Hugging Face mirror (the sha256 check still applies), and ends with one test rewrite, so
+  a llama.cpp that cannot run the model fails at install time with its error
+  (`--no-test` skips it).
 - CI runs pyflakes. The evidence's limits section was out of date (it said English was
   not measured).
 

@@ -67,8 +67,9 @@ on (see *Responsible use*).
 
 ### 3. Check the installation (once)
 
-Run `python3 <skill>/scripts/install_model.py`: if everything is there it verifies it and
-ends with "Ready"; if something is missing, it says so.
+Run `python3 <skill>/scripts/install_model.py`: if everything is there it verifies it, says
+"Ready" and rewrites one test sentence (10–60 s), so a llama.cpp that cannot run the model
+fails here with its error; if something is missing, it says so.
 
 1. **llama.cpp**: if missing, macOS and Linux `brew install llama.cpp`; Windows
    `winget install llama.cpp`. On Windows `rewrite.py` also looks in winget's folder, so no

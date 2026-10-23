@@ -16,9 +16,13 @@ resumes where it stopped. It checks the free space first. Where huggingface.co i
 blocked, HF_ENDPOINT points it to a mirror (the same variable huggingface_hub uses);
 the sha256 check still applies.
 
+Then it rewrites one short sentence, so a llama.cpp that rejects a flag or cannot load
+the model fails here, with its error, and not in the middle of a text (--no-test skips it).
+
 usage:
   python3 scripts/install_model.py        (on Windows: python or py)
 """
+import argparse
 import hashlib
 import os
 import shutil
@@ -111,7 +115,26 @@ def bytes_missing(folder):
     return need
 
 
+def smoke_test():
+    """One short rewrite with the real model: 0 if llama.cpp runs it, 1 with its error."""
+    sentence = "The small town hosts a market every Saturday morning in the main square."
+    print("\nTesting one rewrite (10-60 s) ...", flush=True)
+    try:
+        out = rewrite.rewrite_paragraph(sentence, threads=4)
+    except rewrite.LlamaError as e:
+        print(f"ERROR: the model is downloaded but llama.cpp could not run it.\n{e}")
+        return 1
+    if len(out.split()) < 5:
+        print(f"WARNING: llama.cpp ran but wrote almost nothing: {out!r}. Update llama.cpp.")
+        return 1
+    print(f"  {sentence}\n  -> {out}")
+    return 0
+
+
 def main():
+    ap = argparse.ArgumentParser(description="Downloads and checks the local model.")
+    ap.add_argument("--no-test", action="store_true", help="skip the test rewrite at the end")
+    args = ap.parse_args()
     if not rewrite.llama_binary():
         print("ERROR: llama.cpp is missing. " + rewrite.HOW_TO_INSTALL_LLAMA)
         return 1
@@ -128,7 +151,7 @@ def main():
     for f in (rewrite.ADAPTER, rewrite.BASE):
         print(f"  {f}  {os.path.getsize(os.path.join(rewrite.MODEL_DIR, f)) / 1e9:.2f} GB")
     print(f"  llama.cpp: {rewrite.llama_binary()}")
-    return 0
+    return 0 if args.no_test else smoke_test()
 
 
 if __name__ == "__main__":
