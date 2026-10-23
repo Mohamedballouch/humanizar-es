@@ -10,7 +10,8 @@ after scripts/rewrite.py, it took two full essays to 0% and 10% on Grammarly
 enough (57%).
 
 Respects proper nouns: it does not lowercase them if they are in --concepts or if
-they appear capitalized mid-sentence in the text.
+they appear capitalized mid-sentence in the text. Markdown code, tables, headings and
+quotations are left as they are; list items are joined one by one.
 
 usage:
   python3 scripts/join.py rewritten.txt -o final.txt --concepts concepts.txt
@@ -22,6 +23,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blocks  # noqa: E402
 import check  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on «» or ñ
@@ -261,20 +263,27 @@ def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, la
     """doubtful: if it is a list, it receives the words that were lowercased without
     appearing that way anywhere else in the text (possible proper nouns).
     lang: "es", "en" or None to detect it. no_dashes: dashes between words become commas."""
-    lang = lang or detect_language(text)
+    paragraphs = blocks.split(text)
+    lang = lang or detect_language(" ".join(blocks.prose_of(x) for x in paragraphs))
     c = LANGUAGES[lang]
     rnd = random.Random(seed)
     proper = proper_nouns(text, concepts, lang)
-    paragraphs = [x for x in re.split(r"\n\s*\n", text.strip()) if x.strip()]
-    if no_dashes:
-        paragraphs = [replace_dashes(x) for x in paragraphs]
     lowered = []
-    if pauses:
-        output = "\n\n".join(join_with_pauses(x, proper, pauses, rnd, lowered, lang)
-                             for x in paragraphs) + "\n"
-    else:
-        output = "\n\n".join(join_paragraph(x, proper, p, rnd, max_words, lowered, lang)
-                             for x in paragraphs) + "\n"
+
+    def one(x):
+        x = replace_dashes(x) if no_dashes else x
+        if pauses:
+            return join_with_pauses(x, proper, pauses, rnd, lowered, lang)
+        return join_paragraph(x, proper, p, rnd, max_words, lowered, lang)
+
+    out = []
+    for x in paragraphs:
+        k = blocks.kind(x)
+        if k == "list":
+            out.append(blocks.rebuild([(m, one(t)) for m, t in blocks.items(x)]))
+        else:
+            out.append(one(x) if k == "prose" else x)
+    output = "\n\n".join(out) + "\n"
     if doubtful is not None:
         words = set(re.findall(r"\w+", text))
         doubtful.extend(sorted({w for w in lowered if w.lower() not in words

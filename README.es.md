@@ -79,9 +79,15 @@ Cada párrafo recibe una pasada, y el intento se descarta y se repite cuando:
   tenía (en un ensayo de prueba el modelo escribió «(De Anima, libro i, cap. vi)», que no
   existe);
 - **copia el original**: más del 60% de sus palabras en tramos de 8 o más palabras idénticas;
+- **pierde una cifra** del original (un año, un monto): se repite y, si todos los intentos
+  la pierden, se queda el más cercano y se avisa qué cifra devolver;
+- **cambia una URL, un enlace o `código en línea`**;
 - sale truncado o se desboca.
 
-Luego `check.py` compara conceptos y negaciones, y una persona corrige **de una a tres
+Respeta Markdown: el código, las tablas, los títulos y las citas en bloque quedan como
+están, y una lista se reescribe elemento por elemento con sus viñetas.
+
+Luego `check.py` compara conceptos, negaciones y cifras, y una persona corrige **de una a tres
 palabras** como máximo. Lo que necesite más se regenera con el modelo (`--only`); nunca se
 escribe a mano ni se pega de vuelta del original: arreglos a mano de cuatro palabras o más
 dejaron la mitad de un ensayo en 3% en Grammarly; al regenerar esos párrafos bajó a 0%.
@@ -92,7 +98,8 @@ raya en cada oración. `tells.py` puntúa cada párrafo con el catálogo de
 [*Signs of AI writing*](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing) de
 Wikipedia, ordenado por fuerza en [blader/humanizer](https://github.com/blader/humanizer), y
 dice qué párrafos regenerar. Nunca los arregla: cada arreglo a mano devuelve la huella del
-chat. En el ejemplo en inglés, el original suma 29 y la reescritura 17.
+chat. También lista las marcas de formato (etiquetas en negrita, emojis, Títulos Con
+Mayúsculas), las únicas que puedes arreglar a mano, porque quitar formato no agrega palabras. En el ejemplo en inglés, el original suma 29 y la reescritura 17.
 
 ### 3. Reconstruir el ritmo
 
@@ -309,7 +316,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 65 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 76 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -353,10 +360,11 @@ humanizar-es/
 │   ├── rewrite.py           etapas 1, 2 y 4: reescribe, cuida la fidelidad, candidatos
 │   ├── check.py             etapa 2: conceptos y negaciones, original contra reescritura
 │   ├── tells.py             etapas 2 y 4: frases hechas de IA por párrafo, qué regenerar
+│   ├── blocks.py            párrafos y bloques de Markdown (código, tablas, listas), compartido
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   65 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   76 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,

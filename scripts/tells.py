@@ -28,6 +28,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blocks  # noqa: E402
 import check  # noqa: E402
 import join  # noqa: E402
 
@@ -171,6 +172,49 @@ def find(paragraph, lang="en"):
     opening = next((o for o in STOCK_OPENINGS[lang] if start.startswith(o)), None)
     if opening:
         hits.append(("stock opening", 2, opening))
+    # three or more sentences in a row that open with the same word («She noted… She…»)
+    firsts = [m.group(1) for m in re.finditer(r"(?:^|[.!?]\s+)[¿¡«\"]?(\w+)", t)]
+    run = 1
+    for a, b in zip(firsts, firsts[1:]):
+        run = run + 1 if a == b and a not in ARTICLES else 1
+        if run == 3:
+            hits.append(("repeated opening", 1, a + " ×3"))
+    return hits
+
+
+ARTICLES = {"the", "a", "an", "el", "la", "los", "las", "un", "una", "lo"}
+EMOJI = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF\u2B50\u2B06\u2934\u2935]")
+BOLD = re.compile(r"\*\*[^*\n]+\*\*|__[^_\n]+__")
+
+
+def formatting(block):
+    """Markup that marks AI text as much as its words: a bold label on every item, bold
+    sprinkled in prose, emojis in headings and lists, arrows, Title Case Headings. This is
+    the one kind of tell to fix by hand: removing markup adds no words."""
+    k = blocks.kind(block)
+    hits = []
+    if k == "list":
+        texts = [t for _, t in blocks.items(block)]
+        for t in texts:
+            t = EMOJI.sub("", t).lstrip()
+            if re.match(r"(?:\*\*|__)[^*_\n]{1,60}(?::\s*(?:\*\*|__)|(?:\*\*|__)\s*:)", t):
+                hits.append(("bold label", 1, "**…:**"))
+    elif k in ("prose", "heading"):
+        texts = [block]
+    else:
+        return hits
+    for t in texts:
+        bare = EMOJI.sub("", t).lstrip()
+        rest = re.sub(r"^(?:\*\*|__)[^*_\n]{1,60}(?:\*\*|__)\s*:?", "", bare) if k == "list" else t
+        hits += [("bold", 1, "**…**") for _ in BOLD.finditer(rest)]
+        hits += [("emoji", 1, m.group(0)) for m in EMOJI.finditer(t)]
+        hits += [("arrow", 1, "→") for _ in re.finditer("→", t)]
+    title = EMOJI.sub("", block.lstrip("#")).strip()
+    words = re.findall(r"[^\W\d_][\w'-]*", title)
+    if (k == "heading" or (k == "prose" and is_title(block))) and len(words) >= 4:
+        long_words = [w for w in words[1:] if len(w) >= 4]
+        if len(long_words) >= 3 and all(w[0].isupper() for w in long_words):
+            hits.append(("Title Case heading", 1, title[:40]))
     return hits
 
 
@@ -184,7 +228,8 @@ def summary(hits):
     parts = []
     for (label, text), n in counts.most_common():
         shown = text if len(text) <= 40 else text[:37] + "…"
-        tag = "" if label in ("AI word", "palabra de IA", "dash", "raya") else f" ({label})"
+        tag = "" if label in ("AI word", "palabra de IA", "dash", "raya", "bold", "emoji",
+                              "arrow") else f" ({label})"
         parts.append(f"{shown}{tag}" + (f" ×{n}" if n > 1 else ""))
     return ", ".join(parts)
 
@@ -201,7 +246,7 @@ def suggested_lead(paragraph, lang="en"):
 
 
 def paragraphs_of(text):
-    return [x.strip() for x in re.split(r"\n\s*\n", text) if x.strip()]
+    return blocks.split(text)
 
 
 def is_title(p):
@@ -209,12 +254,14 @@ def is_title(p):
 
 
 def report(paragraphs, lang):
-    """[(number, score, hits)] for the paragraphs that are not titles."""
+    """[(number, score, hits)] for the paragraphs that are prose or lists and not titles;
+    code, tables, headings and quotations are not the author's prose."""
     out = []
     for i, p in enumerate(paragraphs, 1):
-        if is_title(p):
+        prose = blocks.prose_of(p)
+        if not prose or is_title(p):
             continue
-        hits = find(p, lang)
+        hits = find(prose, lang)
         out.append((i, sum(w for _, w, _ in hits), hits))
     return out
 
@@ -236,7 +283,8 @@ def main():
     except OSError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
-    lang = args.lang or join.detect_language(texts[-1])
+    last_blocks = paragraphs_of(texts[-1])
+    lang = args.lang or join.detect_language(" ".join(blocks.prose_of(b) for b in last_blocks))
     reports = [report(paragraphs_of(t), lang) for t in texts]
     last, name = reports[-1], args.files[-1]
 
@@ -262,11 +310,16 @@ def main():
               "with the fewest tells that still says everything (the rewrite before join.py):\n"
               "  python3 scripts/rewrite.py 00-original.txt -o 01-rewritten.txt "
               f"--concepts concepts.txt --only {only} --candidates 6")
-        paragraphs = paragraphs_of(texts[-1])
         for i, _ in flagged:
-            lead = suggested_lead(paragraphs[i - 1], lang)
+            lead = suggested_lead(blocks.prose_of(last_blocks[i - 1]), lang)
             if lead:
                 print(f"  ¶{i} opens with a stock connector; add --lead \"{lead}\" for that one.")
+    markup = [(i, formatting(b)) for i, b in enumerate(last_blocks, 1)]
+    markup = [(i, h) for i, h in markup if h]
+    if markup:
+        print("\nFormatting tells (these you may fix by hand: removing markup adds no words):")
+        for i, h in markup:
+            print(f"  ¶{i:<3} {summary(h)}")
     if args.max is not None and any(s > args.max for _, s, _ in last):
         return 1
     return 0

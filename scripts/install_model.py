@@ -12,13 +12,16 @@ Needs llama.cpp:
 
 Destination: $HUMANIZE_MODEL_DIR or ~/.cache/humanizar-es/hip. If the
 files are already there, it only verifies them. If it gets cut off, run it again: it
-resumes where it stopped.
+resumes where it stopped. It checks the free space first. Where huggingface.co is
+blocked, HF_ENDPOINT points it to a mirror (the same variable huggingface_hub uses);
+the sha256 check still applies.
 
 usage:
   python3 scripts/install_model.py        (on Windows: python or py)
 """
 import hashlib
 import os
+import shutil
 import sys
 import time
 import urllib.error
@@ -30,11 +33,13 @@ import rewrite  # noqa: E402
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(errors="replace")
 
-BASE_URL = "https://huggingface.co/mradermacher/Qwen3-4B-Base-GGUF/resolve/main/Qwen3-4B-Base.Q8_0.gguf"
+HF = (os.environ.get("HF_ENDPOINT") or "https://huggingface.co").rstrip("/")
+BASE_URL = HF + "/mradermacher/Qwen3-4B-Base-GGUF/resolve/main/Qwen3-4B-Base.Q8_0.gguf"
 BASE_SHA = "4498bfc249d7597bef6e4bff1637c4cb9c6434974cada81b68a26974e23be977"
 ADAPTER_URL = "https://github.com/ervin-mo/humanizar-es/releases/download/modelo-hip/hip-qwen3-4b-base-q8_0.gguf"
 ADAPTER_SHA = "2f120a1f9e1f7d97e5a011a13c6dde127ce08c12edc96efba4bf97542ffdd99c"
 CHUNK = 1 << 20
+SIZES = {rewrite.BASE: 4.4e9, rewrite.ADAPTER: 0.3e9}  # rounded up, for the space check
 
 
 def sha256(path):
@@ -95,11 +100,28 @@ def download(name, url, sha, tries=3):
     os.replace(partial, final)
 
 
+def bytes_missing(folder):
+    """What is left to download, counting what a cut download already saved."""
+    need = 0
+    for name, size in SIZES.items():
+        final = os.path.join(folder, name)
+        if not os.path.isfile(final):
+            part = final + ".part"
+            need += max(0, size - (os.path.getsize(part) if os.path.isfile(part) else 0))
+    return need
+
+
 def main():
     if not rewrite.llama_binary():
         print("ERROR: llama.cpp is missing. " + rewrite.HOW_TO_INSTALL_LLAMA)
         return 1
     os.makedirs(rewrite.MODEL_DIR, exist_ok=True)
+    need, free = bytes_missing(rewrite.MODEL_DIR), shutil.disk_usage(rewrite.MODEL_DIR).free
+    if need > free:
+        print(f"ERROR: the model needs {need / 1e9:.1f} GB more and {rewrite.MODEL_DIR} has "
+              f"{free / 1e9:.1f} GB free. Free some space, or set HUMANIZE_MODEL_DIR to a "
+              "folder on another disk.")
+        return 1
     download(rewrite.ADAPTER, ADAPTER_URL, ADAPTER_SHA)
     download(rewrite.BASE, BASE_URL, BASE_SHA)
     print(f"\nReady: {rewrite.MODEL_DIR}")

@@ -1,5 +1,30 @@
 # Changelog
 
+## 3.3.0 — October 23, 2026
+
+**Documents, not only essays.** Emails, posts and documentation carry Markdown; until now
+a fenced code block with a blank line split into two «paragraphs», code and tables were
+rewritten and joined like prose, and a list came back as one run of sentences.
+
+- `scripts/blocks.py`, shared by every script: a fenced block stays one block; code,
+  tables, headings, quotations, HTML and rules are kept as they are; a list is rewritten
+  (and joined) item by item, keeping its markers. Plain texts split exactly as before.
+- **Fidelity guards** in `rewrite.py`: a try that changes a URL, a link target, an e-mail
+  address or `inline code` is never used; a try that drops a figure of the original (a
+  year, an amount) is retried, and if every try does, the closest is kept and the report
+  names the figure to put back (a one-word fix).
+- `check.py` lists the figures of the original missing from a version («60%» → «sixty
+  percent»), matches plurals like policy → policies and luz → luces, and lets a concept
+  contain `#` (C#).
+- `tells.py`: formatting tells (a bold label on every list item, bold in prose, emojis,
+  arrows, Title Case Headings), reported apart because they are the one kind you may fix
+  by hand; three sentences in a row opening with the same word; code, tables and headings
+  are not scanned as prose.
+- `install_model.py` checks the free space before downloading and honours `HF_ENDPOINT`
+  for a Hugging Face mirror (the sha256 check still applies).
+- CI runs pyflakes. The evidence's limits section was out of date (it said English was
+  not measured).
+
 ## 3.2.0 — October 23, 2026
 
 **English: tells of AI writing.** A new `scripts/tells.py` scores each paragraph against the

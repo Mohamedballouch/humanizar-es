@@ -12,6 +12,8 @@ in two ways:
   2. Negations: warns if a negative construction of the original ("no
      contradiction", "never", "without") disappears from the variant. It is the
      most dangerous error: it flips the meaning and no proofreader catches it.
+  3. Figures: warns if a number of the original (a year, an amount, a percentage)
+     is missing from the variant, so «60%» -> «sixty percent» or a dropped year is seen.
 
 Standard library only.
 
@@ -23,8 +25,10 @@ Usage:
 Concepts file format (one per line, # for comments):
   Aristotle | the Stagirite       <- variants separated by |; any one is enough
   principle of non-contradiction
-  antinomy                        <- whole word; accepts the plural (antinomies)
+  antinomy                        <- whole word; accepts the plural (antinomies, policy ->
+                                     policies, luz -> luces)
   subatomic*                      <- with * it matches by prefix: subatomic, subatomics...
+  C#                              <- a # starts a comment only at the start or after a space
 Matching ignores case and accents.
 
 Exit code: 0 if every variant keeps 100% of the concepts, 1 if any loses one,
@@ -65,6 +69,10 @@ def pattern(term):
     term = norm(term).strip()
     prefix = term.endswith("*")
     parts = [re.escape(p) for p in term.rstrip("*").split()]
+    if not prefix and re.search(r"[^aeiou]y$", parts[-1]):
+        parts[-1] = parts[-1][:-1] + "(?:y|ie)"  # policy, policies
+    elif not prefix and parts[-1].endswith("z"):
+        parts[-1] = parts[-1][:-1] + "(?:z|c(?=es))"  # luz, luces
     end = "" if prefix else r"(?:e?s)?(?!\w)"
     return re.compile(r"(?<!\w)" + r"\s+".join(parts) + end)
 
@@ -73,7 +81,7 @@ def load_concepts(path):
     concepts = []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
-            line = line.split("#", 1)[0].strip()
+            line = re.split(r"(?:^|\s)#", line, maxsplit=1)[0].strip()
             if not line:
                 continue
             variants = [v.strip() for v in line.split("|") if v.strip()]
@@ -134,6 +142,21 @@ def negations(text):
         f"{a} {b}"
         for a, b in re.findall(rf"(?<!\w)({NEGATIONS})\s+(\w+)", clean)
     )
+
+
+NUMBER = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def numbers_lost(original, variant):
+    """Figures of the original missing from the variant, compared without separators so
+    «1,990» and «1990» are the same. Only digits: «two or three days» needs a concept."""
+    key = lambda n: re.sub(r"[.,]", "", n)  # noqa: E731
+    have = {key(n) for n in NUMBER.findall(variant)}
+    lost = []
+    for n in NUMBER.findall(original):
+        if key(n) not in have and n not in lost:
+            lost.append(n)
+    return lost
 
 
 def short_name(path, width=18):
@@ -229,6 +252,14 @@ def main():
         print("  like 'principle of non-contradiction' -> 'principle of contradiction'.")
         for f, missing in warnings:
             print(f"  {short_name(f, 30)}: " + ", ".join(f"«{x}»" for x in missing))
+
+    figures = [(f, numbers_lost(texts[args.original], texts[f])) for f in args.variants]
+    figures = [(f, lost) for f, lost in figures if lost]
+    if figures:
+        print("\nFIGURES from the original that are missing (put them back by hand, or check")
+        print("  they were written out on purpose):")
+        for f, lost in figures:
+            print(f"  {short_name(f, 30)}: " + ", ".join(lost))
 
     return 1 if failed else 0
 

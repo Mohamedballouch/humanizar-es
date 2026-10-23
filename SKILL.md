@@ -2,7 +2,7 @@
 name: humanizar-es
 description: Rewrites AI-generated text (Spanish or English) so AI detectors read it as human - 0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero on the same test essay - without changing what it says and without adding typos. Runs locally with no API or cost, in four measured stages - a base model without chat training rewrites (rewrite.py), fidelity is guarded (concepts, quotes, invented references, copying; check.py), the rhythm is rebuilt in blocks of uneven length (join.py --pauses 2), and paragraphs a detector still flags, or that keep stock AI phrases (tells.py), are regenerated as candidates and selected (rewrite.py --candidates, --lead, --take). Use when asked to "humanize" text, "make it not detectable as AI", "pass Grammarly", "remove AI tells", "make it not sound like ChatGPT", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA", "que no suene a ChatGPT".
 metadata:
-  version: "3.2.0"
+  version: "3.3.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -57,7 +57,8 @@ it says `python3`; everything else is the same. No key or account is needed.
 If the text came through chat, write it to `00-original.txt`, with paragraphs separated by
 a blank line. Leave out a chat model's wrapper around the text («Certainly! Here is…», "I
 hope this helps", "Let me know if…"): it is not part of the text. Never overwrite the
-original.
+original. Markdown is fine: code, tables, headings and quotations are kept as they are, and
+a list is rewritten item by item with its markers (short items stay as they are).
 
 ### 2. Ask what it's for
 
@@ -105,13 +106,20 @@ python3 <skill>/scripts/rewrite.py 00-original.txt -o 01-rewritten.txt --concept
 
 At the end it reports which paragraphs it left as the original and the concept they kept
 losing (check its spelling in `concepts.txt`), and which ones copied long stretches of the
-original in every try. Rerun only those paragraphs, with more `--tries`.
+original in every try. Rerun only those paragraphs, with more `--tries`. A try that drops a
+figure (a year, an amount, a percentage) is retried; if every try does, the closest is kept
+and the report names the figure to put back: that is a one-word fix. A try that changes a
+URL, a link or `inline code` is never used. List items are reported as `3.2` (paragraph 3,
+item 2); `--only` takes the paragraph number.
 
 ### 6. Review and fix, BEFORE joining (blocking)
 
 ```bash
 python3 <skill>/scripts/check.py 00-original.txt 01-rewritten.txt --concepts concepts.txt
 ```
+
+Besides concepts and negations, it lists the figures of the original missing from the
+rewrite: put each one back (a one-word fix) unless it was written out on purpose.
 
 Then scan it for tells of AI writing:
 
@@ -124,6 +132,9 @@ It scores every paragraph (3 = strong tell, 2 = stock word, 1 = weak alone) and 
 stock connector. Regenerate them as candidates (step 9) rather than fixing them: a tell
 is never one of your one-to-three-word fixes. In English, do this before delivering; in
 Spanish, when the user wants the text to read less like AI, not only to pass a detector.
+It also lists **formatting tells** (a bold label on every list item, bold sprinkled in
+prose, emojis in headings and lists, arrows, Title Case Headings): those you may fix by
+hand, with the user's agreement, because removing markup adds no words.
 
 Then **compare every paragraph of `01-rewritten.txt` with the original** and list what
 really changed. Typical slips:
@@ -267,7 +278,8 @@ risk before proceeding.
 - `scripts/rewrite.py` — steps 5, 6 and 9: rewrite with the local base model, guard
   fidelity, `--only`, `--candidates`, `--lead`, `--take`
 - `scripts/join.py` — step 7: rebuild the rhythm of each paragraph
-- `scripts/check.py` — concepts and negations, original against version
+- `scripts/check.py` — concepts, negations and figures, original against version
+- `scripts/blocks.py` — paragraphs and Markdown blocks (code, tables, lists), shared by all
 - `scripts/tells.py` — steps 6 and 9: tells of AI writing per paragraph, what to regenerate
 - `references/evidence.md` — every measurement
 - `references/detectors.md` — how to measure in Grammarly, GPTZero and ZeroGPT, with controls

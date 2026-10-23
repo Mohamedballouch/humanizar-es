@@ -2,6 +2,7 @@
 
     python3 -m unittest discover -s tests -v
 """
+import json
 import os
 import re
 import shutil
@@ -25,6 +26,7 @@ FINAL_EN = os.path.join(EX_EN, "2-final.txt")
 CONCEPTS_EN = os.path.join(EX_EN, "concepts.txt")
 
 sys.path.insert(0, SCRIPTS)
+import blocks  # noqa: E402
 import check  # noqa: E402
 import join  # noqa: E402
 import rewrite  # noqa: E402
@@ -97,6 +99,24 @@ class Check(unittest.TestCase):
             r = run(sys.executable, script("check.py"), ORIGINAL, REWRITTEN, flag)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("concepts (automatic extraction)", r.stdout)
+
+    def test_plurals_comments_and_figures(self):
+        self.assertTrue(check.pattern("policy").search(check.norm("two policies")))
+        self.assertTrue(check.pattern("luz").search(check.norm("las luces")))
+        with tempfile.TemporaryDirectory() as tmp:
+            conc = os.path.join(tmp, "c.txt")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("C# | C sharp   # the language\n# a comment line\n")
+            self.assertEqual(check.load_concepts(conc), [("C#", ["C#", "C sharp"])])
+            a, b = os.path.join(tmp, "a.txt"), os.path.join(tmp, "b.txt")
+            with open(a, "w", encoding="utf-8") as fh:
+                fh.write("In 2020, 60% of the 1,990 staff moved home.\n")
+            with open(b, "w", encoding="utf-8") as fh:
+                fh.write("In 2020, sixty percent of the 1990 staff moved home.\n")
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", conc)
+            self.assertIn("FIGURES from the original", r.stdout)
+            self.assertIn("b.txt: 60", r.stdout)
+            self.assertNotIn("1,990", r.stdout.split("FIGURES")[1])
 
     def test_missing_file_exits_with_two(self):
         r = run(sys.executable, script("check.py"), ORIGINAL, "does-not-exist.txt")
@@ -226,6 +246,17 @@ class Join(unittest.TestCase):
                          "Llegó tarde y ¿vienes mañana?")
         self.assertIn("y ¿Juan viene", join.join_text("Llegó tarde. ¿Juan viene?",
                                                       [("Juan", ["Juan"])], lang="es"))
+
+    def test_markdown_blocks_are_left_alone_and_list_items_joined_one_by_one(self):
+        doc = ("# A Title. With a period\n\n```\nx = 1. Y = 2.\n```\n\n"
+               "- First item. It has two sentences.\n- Second item. Also two.\n\n"
+               "| a. B | c. D |\n\nPlain text. More text.\n")
+        out = join.join_text(doc, lang="en")
+        self.assertIn("# A Title. With a period", out)
+        self.assertIn("```\nx = 1. Y = 2.\n```", out)
+        self.assertIn("- First item and it has two sentences.\n- Second item and also two.", out)
+        self.assertIn("| a. B | c. D |", out)
+        self.assertIn("Plain text and more text.", out)
 
     def test_detects_the_language(self):
         self.assertEqual(join.detect_language(read(ORIGINAL)), "es")
@@ -491,6 +522,100 @@ class Rewrite(unittest.TestCase):
             self.assertIn("altered how offices", read(out))
             self.assertIn("done, try 3", r.stdout)
 
+    def _scripted_llama(self, tmp, script):
+        """A fake llama that answers from `script`: {opening words: [answer per call]}."""
+        for f in (rewrite.BASE, rewrite.ADAPTER):
+            open(os.path.join(tmp, f), "w").close()
+        fake = os.path.join(tmp, "scripted_llama.py")
+        with open(fake, "w", encoding="utf-8") as fh:
+            fh.write(
+                "import json, os, sys\n"
+                "args = sys.argv[1:]\n"
+                "prompt = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                "src = prompt.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+                f"script = json.loads({json.dumps(json.dumps(script))})\n"
+                f"log = {os.path.join(tmp, 'log')!r}\n"
+                "with open(log, 'a', encoding='utf-8') as fh: fh.write(src[:20] + '\\n')\n"
+                "key = next(k for k in script if src.startswith(k))\n"
+                "n = sum(1 for ln in open(log, encoding='utf-8') if ln.startswith(src[:20]))\n"
+                "out = script[key][min(n, len(script[key])) - 1]\n"
+                "sys.stdout.buffer.write((out + '\\n</target_text>').encode('utf-8'))\n")
+        return fake
+
+    def _run_scripted(self, text, answers, *extra):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        fake = self._scripted_llama(tmp, answers)
+        src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+        r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--threads", "1",
+                *extra, env=env)
+        log = os.path.join(tmp, "log")
+        calls = read(log).splitlines() if os.path.exists(log) else []
+        return r, (read(out) if os.path.exists(out) else ""), calls
+
+    def test_markdown_code_and_headings_stay_and_lists_keep_their_items(self):
+        text = ("## Working from home\n\n"
+                "```bash\npython3 install.py\n\nls\n```\n\n"
+                "- Remote teams now meet in person on fewer days than before the change came.\n"
+                "- Offices are planned around the weeks when the whole staff comes in.\n"
+                "- Short item\n")
+        script_ = {"Remote teams": [" gather in person less often than they did before that shift."],
+                   "Offices are": [" now arranged around those weeks when everybody shows up at once."]}
+        r, out, calls = self._run_scripted(text, script_, "--tries", "1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(calls), 2, calls)  # only the two list items reached the model
+        self.assertEqual(out, "## Working from home\n\n```bash\npython3 install.py\n\nls\n```\n\n"
+                              "- Remote teams gather in person less often than they did before that shift.\n"
+                              "- Offices are now arranged around those weeks when everybody shows up at once.\n"
+                              "- Short item\n")
+        self.assertIn("kept (code)", r.stdout)
+        self.assertIn("list, 2 of 3 items rewritten", r.stdout)
+
+    def test_a_dropped_figure_is_retried_then_kept_with_a_warning(self):
+        text = "Sales grew 40% in 2021 across all of the regions that we serve today.\n"
+        lost = " a great deal in 2021 across every region that we serve right now."
+        good = " by 40% in 2021 across every region that the company serves now."
+        r, out, _ = self._run_scripted(text, {"Sales grew": [lost, good]}, "--tries", "2")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("by 40% in 2021", out)
+        self.assertIn("done, try 2", r.stdout)
+        r, out, _ = self._run_scripted(text, {"Sales grew": [lost]}, "--tries", "1")
+        self.assertIn("a great deal in 2021", out)  # kept, with the figure to put back named
+        self.assertIn("Put the figure back by hand", r.stdout)
+        self.assertIn("1 (40)", r.stdout)
+        self.assertEqual(rewrite.numbers_lost("Hubo 1.990 votos en 2020.", "En 2020, 1990 votos."), [])
+
+    def test_a_changed_link_or_inline_code_is_never_used(self):
+        text = ("Read the guide at https://example.com/docs and run `pip install x` before you "
+                "start the install on your own machine.\n")
+        bad = (" manual at https://example.org/docs and run `pip install x` before starting the "
+               "installation on the computer you use.")
+        good = (" manual at https://example.com/docs and run `pip install x` before starting the "
+                "installation on the computer you use.")
+        r, out, _ = self._run_scripted(text, {"Read the": [bad, good]}, "--tries", "2")
+        self.assertIn("example.com/docs", out)
+        self.assertIn("done, try 2", r.stdout)
+        self.assertEqual(rewrite.markup_problem(text, text.replace("`pip install x`", "pip")),
+                         "(link or code changed)")
+        self.assertIsNone(rewrite.markup_problem("Write to ana@example.com today.",
+                                                 "Send it to ana@example.com now."))
+
+    def test_take_keeps_the_lines_of_a_list_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out, cand = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Intro text here.\n\n- one thing here.\n- two things here.\n")
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("Intro rewritten.\n\n- one.\n- two.\n")
+            with open(cand, "w", encoding="utf-8") as fh:
+                fh.write("- first thing.\n- second thing.\n")
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--take", "2=" + cand)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(read(out), "Intro rewritten.\n\n- first thing.\n- second thing.\n")
+
     def _echo_llama(self, tmp):
         """A fake llama that writes back a different, faithful version each call."""
         for f in (rewrite.BASE, rewrite.ADAPTER):
@@ -649,6 +774,23 @@ class Tells(unittest.TestCase):
                          "The future")
         self.assertIsNone(tells.suggested_lead("One of the most important problems is time."))
 
+    def test_formatting_tells_and_markdown_blocks(self):
+        doc = ("## 🚀 Strategic Negotiations And Global Partnerships\n\n"
+               "She noted the door. She noted the lock. She filed both away for later.\n\n"
+               "- **User Experience:** The interface is new.\n- 💡 **Key Insight:** Users want less.\n\n"
+               "```\nWe delve into the tapestry here.\n```\n")
+        parts = tells.paragraphs_of(doc)
+        self.assertEqual(len(parts), 4)
+        labels = [label for label, _, _ in tells.formatting(parts[0])]
+        self.assertIn("emoji", labels)
+        self.assertIn("Title Case heading", labels)
+        self.assertEqual([label for label, _, _ in tells.formatting(parts[2])].count("bold label"), 2)
+        self.assertIn("repeated opening", [label for label, _, _ in tells.find(parts[1], "en")])
+        self.assertEqual(tells.score("The cat sat. The dog ran. The bird flew away.", "en"), 0)
+        numbers = [i for i, _, _ in tells.report(parts, "en")]
+        self.assertEqual(numbers, [2, 3])  # the heading and the code are not prose
+        self.assertEqual(tells.formatting("## How the six options compare"), [])
+
     def test_cli_names_the_paragraphs_to_regenerate(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = os.path.join(tmp, "text.txt")
@@ -664,6 +806,42 @@ class Tells(unittest.TestCase):
             r = run(sys.executable, script("tells.py"), ORIGINAL_EN, REWRITTEN_EN)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("total", r.stdout)
+
+
+class Blocks(unittest.TestCase):
+    DOC = ("# Title\n\nIntro paragraph. It has two sentences.\n\n```python\nx = 1\n\ny = 2\n```\n\n"
+           "- **Speed:** pages load faster.\n- Second item that wraps\n  onto a second line.\n\n"
+           "| a | b |\n|---|---|\n\n> A quote here.\n\n    indented code\n\n---\n\nLast paragraph.\n")
+
+    def test_kinds_and_a_fence_with_blank_lines_stays_one_block(self):
+        got = [blocks.kind(b) for b in blocks.split(self.DOC)]
+        self.assertEqual(got, ["heading", "prose", "code", "list", "table", "quote", "code",
+                               "rule", "prose"])
+        self.assertEqual(blocks.split(self.DOC)[2], "```python\nx = 1\n\ny = 2\n```")
+
+    def test_list_items_keep_markers_and_join_continuations(self):
+        lst = blocks.split(self.DOC)[3]
+        pairs = blocks.items(lst)
+        self.assertEqual(pairs, [("- ", "**Speed:** pages load faster."),
+                                 ("- ", "Second item that wraps onto a second line.")])
+        self.assertEqual(blocks.rebuild(pairs),
+                         "- **Speed:** pages load faster.\n- Second item that wraps onto a second line.")
+        self.assertEqual(blocks.items("1. One.\n2) Two.\n- [x] Done."),
+                         [("1. ", "One."), ("2) ", "Two."), ("- [x] ", "Done.")])
+
+    def test_fences_close_their_block_and_an_intro_line_leads_its_list(self):
+        got = blocks.split("Run this:\n```\nls\n```\nThen read the output. It is short.\n")
+        self.assertEqual(got, ["Run this:", "```\nls\n```", "Then read the output. It is short."])
+        intro = "Three things matter:\n- the price of the plan.\n- the time it takes."
+        self.assertEqual(blocks.kind(intro), "list")
+        self.assertEqual(blocks.items(intro)[0], ("", "Three things matter:"))
+        self.assertEqual(blocks.kind("Hi John,\nthanks for the call.\n- not a list here"), "prose")
+
+    def test_plain_paragraphs_split_as_before(self):
+        for f in (ORIGINAL, REWRITTEN, ORIGINAL_EN, REWRITTEN_EN):
+            text = read(f)
+            self.assertEqual(blocks.split(text),
+                             [x.strip() for x in re.split(r"\n\s*\n", text) if x.strip()])
 
 
 class ModelDir(unittest.TestCase):
@@ -793,6 +971,17 @@ class Installer(unittest.TestCase):
         description = re.search(r"^description: (.+)$", header, re.M).group(1).strip()
         self.assertEqual(name, "humanizar-es")
         self.assertLessEqual(len(description), 1024)
+
+    def test_model_installer_counts_what_is_left_to_download(self):
+        import install_model
+        with tempfile.TemporaryDirectory() as tmp:
+            full = install_model.bytes_missing(tmp)
+            self.assertGreater(full, 4e9)
+            with open(os.path.join(tmp, rewrite.ADAPTER), "wb"):
+                pass
+            with open(os.path.join(tmp, rewrite.BASE + ".part"), "wb") as fh:
+                fh.write(b"x" * 1000)
+            self.assertEqual(install_model.bytes_missing(tmp), install_model.SIZES[rewrite.BASE] - 1000)
 
     def test_model_installer_has_hashes(self):
         s = read(script("install_model.py"))
