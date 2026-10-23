@@ -245,7 +245,9 @@ included (on Ubuntu, `sudo apt install libvulkan-dev glslc spirv-headers` first)
 than some distributions' own package), added to llama.cpp's `cmake -S . -B build`; brew's
 llama.cpp on a Mac uses Metal already. `install_model.py` then says whether
 llama.cpp sees the GPU. It is off by default because on a Mac the GPU froze the screen
-while the model ran. It is the same model either way; the measurements were made on CPU.
+while the model ran. If the laptop lists its integrated graphics too, `export
+HUMANIZE_GPU_DEVICE=Vulkan1` (a name from `llama-completion --list-devices`) pins the run to
+the discrete one. It is the same model either way; the measurements were made on CPU.
 
 ---
 

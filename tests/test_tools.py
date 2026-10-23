@@ -1613,6 +1613,9 @@ class Installer(unittest.TestCase):
         for on in ("1", "yes", "ON", "all"):
             self.assertEqual(rewrite.device_args({"HUMANIZE_GPU": on}), ["-ngl", "99"], on)
         self.assertEqual(rewrite.device_args({"HUMANIZE_GPU": "20"}), ["-ngl", "20"])
+        pinned = {"HUMANIZE_GPU": "1", "HUMANIZE_GPU_DEVICE": "Vulkan1"}
+        self.assertEqual(rewrite.device_args(pinned), ["-ngl", "99", "-dev", "Vulkan1"])
+        self.assertEqual(rewrite.device_args({"HUMANIZE_GPU_DEVICE": "Vulkan1"}), cpu)  # off stays off
 
     def test_rewrite_passes_the_device_to_llama_cpp(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,5 +1,10 @@
 # Changelog
 
+## 4.3.2 — October 23, 2026
+
+- `HUMANIZE_GPU_DEVICE=Vulkan1` pins the GPU run to one device of `llama-completion
+  --list-devices`, for a laptop whose integrated graphics are listed beside the discrete GPU.
+
 ## 4.3.1 — October 23, 2026
 
 - The GPU instructions lead with Vulkan (`-DGGML_VULKAN=ON`), which needs no CUDA toolkit

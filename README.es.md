@@ -245,7 +245,9 @@ o `-DGGML_CUDA=ON` para NVIDIA con el CUDA toolkit (una RTX 50 necesita CUDA 12.
 más nuevo que el paquete de algunas distribuciones), añadido al `cmake -S . -B build` de
 llama.cpp; el llama.cpp de brew en una Mac ya usa Metal. Después, `install_model.py` dice
 si llama.cpp ve la GPU. Viene apagado porque en una Mac la GPU trababa la pantalla mientras
-corría el modelo. Es el mismo modelo en los dos casos; las mediciones se hicieron en CPU.
+corría el modelo. Si el portátil lista también su gráfica integrada, `export
+HUMANIZE_GPU_DEVICE=Vulkan1` (un nombre de `llama-completion --list-devices`) fija la
+ejecución en la dedicada. Es el mismo modelo en los dos casos; las mediciones se hicieron en CPU.
 
 ---
 
