@@ -223,8 +223,12 @@ reads as "the new version is worse".
 
 ## 6. Limits
 
-- Four essays, all in Spanish. We don't yet know how well it carries over to emails,
-  marketing, technical writing or English.
+- Four essays in Spanish and two in English (section 2d). We don't yet know how well it
+  carries over to emails, marketing or technical writing, and GPTZero's English model
+  is not passed.
+- `tells.py` (3.2.0) and the English joining changes of 3.2.0 and 3.3.0 are not measured
+  against any detector yet. Section 4 is why they find and never fix: a chat-model
+  rewrite without the typical AI phrases still scored 100% in Grammarly.
 - ZeroGPT passes only with selection (section 2c), which costs model runs and a person's reading.
 - One scan per version. Differences of a few points may be noise.
 - Detectors change; this is a snapshot of October 2026.

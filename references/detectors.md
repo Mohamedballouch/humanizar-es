@@ -46,6 +46,45 @@ and highlights in yellow the sentences it flags: that is the list to regenerate.
 - **Famous classics are false positives:** Emerson's *Self-Reliance* (1841) scored 64.5% AI.
   Use an obscure human text as control (we used Hacker News comments from 2016: 1.5%).
 
+## Originality.ai
+
+[originality.ai](https://originality.ai). Models 5.0 and 5.0 Max since October 2026 (the
+older Lite, Turbo and Academic models were retired in September 2026); 5.0 Max is the one
+it recommends for high-stakes decisions. It detects the language by itself: English and
+Spanish are among its 30.
+
+- **Free checker:** 3 scans a day, up to 2,000 words each. Beyond that it is paid: about
+  $0.01 per 100 words on 5.0 and $0.10 on 5.0 Max (pay-as-you-go credits, or a monthly plan).
+- **At least 100 words**; below that the score is unreliable. Measure whole documents, as
+  with the others.
+- **Read the AI score of the whole text**, and the highlighted passages: those are the
+  paragraphs to regenerate.
+- **It claims to catch humanizers** (it reports 92% on a benchmark of humanized texts with
+  no human controls), so a version that passes the others may not pass it. Treat it as the
+  strictest of the public detectors.
+- **Your text stays in its dashboard** until you delete the scan, and scans may be used to
+  improve its service unless you turn that off in the settings. Delete the scans of an
+  unpublished paper.
+
+## Turnitin and iThenticate
+
+What journals, conferences and universities run. **There is no way to measure them from
+here:** Turnitin's AI detection is sold only to institutions, and iThenticate's AI add-on
+only to publishers (its pay-per-document credits for individuals include no AI score).
+What is known, from Turnitin's own notes (October 2026):
+
+- English, Spanish and Japanese, then Arabic, Dutch, German and Turkish; 300 to 30,000 words
+  of prose. A score from 1% to 19% shows as "*%", without highlights.
+- **Since August 2025 it counts English text from "AI bypassers" (humanizers) as
+  AI-generated.** An independent study (Int. J. Educational Integrity, 2026) found it
+  underestimating humanized and mixed papers and flagging no human ones; nobody has
+  published how it scores base-model rewrites.
+- Its release notes name the generators each model was trained on for some languages
+  (Claude among them for Arabic); for English they do not say.
+
+So the public detectors are a proxy, never a promise: a paper that passes Grammarly,
+GPTZero, ZeroGPT and Originality.ai can still be flagged by Turnitin.
+
 ## Always with two controls
 
 In every session, before comparing versions:

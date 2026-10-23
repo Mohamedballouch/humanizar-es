@@ -22,7 +22,22 @@ One fix. The model added a claim the original didn't make:
 |---|---|---|
 | Millions of workers **have been forced to work** from home | Millions of workers **now work** from home | the original said they *split their time*, not that they were forced |
 
-Things left as they were because they say the same thing in other words: "COVID-19
-pandemic" for "global pandemic", "wellness" for "well-being", "sleeping" for "rest".
+Things left as they were because they say the same thing in other words: "wellness" for
+"well-being", "sleeping" for "rest". "COVID-19 pandemic" for "global pandemic" was left too,
+but it names something the original did not: since 3.4.0 `check.py` reports it as an added
+figure ("added 19") and exits with 1, and `rewrite.py` would not have used that try.
 
-`check.py` kept 13 of 13 concepts. `join.py` turned 24 sentences into 7.
+`check.py` kept 13 of 13 concepts. `join.py` turned 24 sentences into 7, and left out
+the "Moreover," that opened a sentence (since 3.2.0).
+
+## Tells of AI writing left
+
+```bash
+python3 scripts/tells.py examples/en/original.txt examples/en/1-rewritten.txt
+```
+
+The original scores 29 and the rewrite 17. What is left is mostly weak (lists of three,
+"studies show"). Two paragraphs carry two stock words or phrases each, which is what
+`tells.py` asks to regenerate: paragraph 3 ("foster", "Moreover,", which `join.py` then
+leaves out) and paragraph 7 (it opens with "Ultimately," and says "one-size-fits-all";
+`tells.py` suggests `--lead "There is"` for it).

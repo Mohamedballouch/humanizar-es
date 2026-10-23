@@ -10,7 +10,10 @@ after scripts/rewrite.py, it took two full essays to 0% and 10% on Grammarly
 enough (57%).
 
 Respects proper nouns: it does not lowercase them if they are in --concepts or if
-they appear capitalized mid-sentence in the text.
+they appear capitalized mid-sentence in the text. Markdown code, tables, headings and
+quotations are left as they are; list items are joined one by one. In a LaTeX file
+(.tex) only the prose is joined: math, citations, references and every command are held as
+placeholders (scripts/latex.py), and everything outside the paragraphs stays byte for byte.
 
 usage:
   python3 scripts/join.py rewritten.txt -o final.txt --concepts concepts.txt
@@ -22,7 +25,9 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import blocks  # noqa: E402
 import check  # noqa: E402
+import latex  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on «» or ñ
     sys.stdout.reconfigure(errors="replace")
@@ -41,22 +46,20 @@ LANGUAGES = {
         "no_warn": set("""Antes Mientras Cuando Aunque Quizá Quizás Hoy Ahora Así Luego
         Entonces Incluso Tampoco Nunca Siempre Todo Toda Todos Todas Cada Otro Otra Más
         Menos Muy Desde Hasta Entre Sobre Tras Ante Según Durante Como Donde""".split()),
-        "suffixes": r"(ar|er|ir|mente)$",
         "hints": set("de la que el en y los las del se por un una con para es".split()),
     },
     "en": {
         "common": set("""The A An This That These Those It Its In On At For Of To With By From
         As If When While And Or But Not No Our Their His Her We They He She You What Which
         There Here Some Many Most Each Every Such""".split()),
-        "and": "and", "but": ("But", "Yet"), "contrast": ("However, ",),
-        "addition": {"Also": "also", "Additionally,": "also", "Moreover,": "also",
-                     "Furthermore,": "also"},
+        "and": "and", "but": ("But", "Yet"),
+        "contrast": ("However, ", "Nevertheless, ", "Nonetheless, ", "Even so, "),
+        "addition": {"Also": "also", "Also,": "also"},
         "always_proper": {"I", "I'm", "I've", "I'd", "I'll"},
         "no_warn": set("""Before After Today Now Then Even Still Never Always Every Each
         Other Another More Less Very Since Until Between Over During How Where Why Once
         Instead Rather Despite Although Though Because Nevertheless Ultimately Finally
         Meanwhile Similarly Consequently Therefore Thus Yet So""".split()),
-        "suffixes": r"(ly|ing|ed)$",
         "hints": set("the and of to is that in it for with as on are this be".split()),
     },
 }
@@ -72,12 +75,22 @@ OPENERS = {
            "Segundo,", "Tercero,", "Finalmente,", "Por último,", "En conclusión,", "Además,",
            "Asimismo,", "También,", "Incluso,", "Por el contrario,", "Con todo,", "Ahora bien,"),
     "en": ("However,", "Therefore,", "Thus,", "So,", "For example,", "For instance,", "In contrast,",
-           "On the other hand,", "First,", "Second,", "Third,", "Finally,", "In short,",
-           "Moreover,", "Furthermore,", "Also,", "Meanwhile,", "Instead,", "That is,"),
+           "By contrast,", "On the other hand,", "First,", "Second,", "Third,", "Firstly,",
+           "Secondly,", "Thirdly,", "Finally,", "Lastly,", "In short,", "Also,", "Meanwhile,",
+           "Instead,", "That is,", "As a result,", "Consequently,", "Nevertheless,",
+           "Nonetheless,", "Even so,", "Still,", "Similarly,", "Likewise,", "In particular,",
+           "At the same time,", "Otherwise,", "Hence,", "Accordingly,", "Ultimately,",
+           "Overall,", "In conclusion,", "In the end,"),
 }
+# English openers that only add weight: «Moreover, the food was great» says the same as
+# «the food was great» after «and». They are among the commonest tells of AI prose
+# (Wikipedia, «Signs of AI writing»), so join.py leaves them out where a sentence opens
+# with one. Spanish keeps «Además»: it is ordinary there and was measured that way.
+FILLERS = {"es": (), "en": ("Additionally, ", "Moreover, ", "Furthermore, ", "In addition, ",
+                            "Notably, ", "Importantly, ")}
 ENUMERATORS = {"Primero,", "Segundo,", "Tercero,", "En primer lugar,", "En segundo lugar,",
                "En tercer lugar,", "Finalmente,", "Por último,", "First,", "Second,", "Third,",
-               "Finally,"}
+               "Firstly,", "Secondly,", "Thirdly,", "Finally,", "Lastly,"}
 # Plain joins inside a block rotate among connectors that never change the meaning.
 NEUTRAL = {"es": (" y ", "; ", " y "), "en": (" and ", "; ", " and ")}
 
@@ -107,9 +120,79 @@ def split_blocks(sentences, pauses, rnd, lang):
     return [0] + sorted(cuts)
 
 
-# «Dr. Smith», «Sr. García», «e.g. Slack»: the period does not close the sentence.
+# «Dr. Smith», «Sr. García», «e.g. Slack», «John F. Kennedy», «J.R.R. Tolkien», «9 a.m.
+# Everyone», «EE.UU. Allí», «cap. VI»: the period does not close the sentence.
 ABBREVIATION = re.compile(r"(?:^|\s)(?:Mr|Mrs|Ms|Dr|Prof|St|Sr|Sra|Srta|Dra|Lic|Ing|vs|etc|"
-                          r"approx|e\.g|i\.e|U\.S|p\.ej)\.$", re.I)
+                          r"approx|aprox|e\.g|i\.e|U\.S|U\.K|p\.ej|Jr|Inc|Ltd|Corp|Fig|Vol|"
+                          r"al|cf|Gen|Gov|Sen|Rep|Mt|Ud|Uds|Sto|Sta|Rev|Lt|Col|Capt|Sgt|Hon|"
+                          r"cap|lib|pág|págs|núm|ed|eds|op|cit|ibid)\.$", re.I)
+INITIAL = re.compile(r"(?:^|[\s.(«\"“'])[A-ZÁÉÍÓÚÑ]\.$")
+DOTTED = re.compile(r"(?:^|\s)(?:\w{1,3}\.){2,}$")  # a.m., D.C., EE.UU., U.S.A.
+BARE_NUMBER = re.compile(r"(?:^|\s)\(?\d{1,3}[.)]$")  # «1. Open the box. 2. Remove the tray.»
+
+
+def no_period_end(s):
+    """True if the period that ends `s` does not end a sentence (or there is none)."""
+    return (not s.endswith(".") or s.endswith("...") or bool(ABBREVIATION.search(s))
+            or bool(INITIAL.search(s)) or bool(DOTTED.search(s))
+            or bool(BARE_NUMBER.search(s)))
+
+
+def core(word):
+    """The word a name check looks at: «Microsoft's» -> «Microsoft», «I’m» -> «I»,
+    «¿Juan» -> «Juan»; «O'Brien» stays whole."""
+    m = re.match(r"[¿¡«\"“(]*([\w-]+(?:['’][A-ZÁÉÍÓÚÑ][\w-]*)?)", word)
+    return m.group(1) if m else word
+
+
+def keeps_capital(word, proper):
+    """«AI», «COVID-19», «iPhone», «McDonald's» and known names keep their capitals when a
+    sentence that opens with them is joined; «aI tools» would be a visible error."""
+    word = core(word)
+    return word in proper or any(c.isupper() for c in word[1:])
+
+
+def lower_first(s):
+    """«La serie» -> «la serie»; «¿Vienes?» -> «¿vienes?»: the capital is after ¿ or ¡."""
+    i = len(s) - len(s.lstrip("¿¡"))
+    return s[:i] + s[i:i + 1].lower() + s[i + 1:]
+
+
+def drop_fillers(sentences, lang):
+    out = []
+    for s in sentences:
+        f = next((x for x in FILLERS[lang] if s.startswith(x)), None)
+        if f and len(s) > len(f):
+            s = s[len(f):]
+            if not keeps_capital(s.split()[0], ()):  # «Moreover, iPhone sales» -> «iPhone sales»
+                s = s[0].upper() + s[1:]
+        out.append(s)
+    return out
+
+
+# Dashes as the universal connector are a tell of AI prose in English. --no-dashes turns
+# a dash between words into a comma; ranges (1990–2000, 1939 – 1945), dashes that open a
+# line (dialogue, lists) and dialogue paragraphs are left alone.
+DASH = re.compile(r"[ \t]*—[ \t]*|[ \t]+(?:–|--)[ \t]+")
+
+
+def replace_dashes(paragraph):
+    if paragraph.lstrip().startswith(("—", "–", "-")):  # dialogue
+        return paragraph
+
+    def comma(m):
+        before, after = paragraph[:m.start()], paragraph[m.end():]
+        if (not before.strip() or before.endswith("\n")
+                or (before[-1:].isdigit() and after[:1].isdigit())):
+            return m.group(0)
+        return ", "
+
+    out = DASH.sub(comma, paragraph)
+    out = re.sub(r":[ \t]*,[ \t]*", ": ", out)
+    out = re.sub(r",\s*,", ",", out)
+    out = re.sub(r",\s*([.;:!?)\]»”\"])", r"\1", out)
+    out = re.sub(r"([(\[«“])\s*,\s*", r"\1", out)
+    return out
 
 
 def detect_language(text):
@@ -120,27 +203,28 @@ def detect_language(text):
 
 def proper_nouns(text, concepts=(), lang="es"):
     common = LANGUAGES[lang]["common"]
-    mid = set(re.findall(r"(?<=[a-záéíóúñü,;:] )([A-ZÁÉÍÓÚÑ][\w'-]+)", text)) - common
+    found = re.findall(r"(?<=[a-záéíóúñü,;:] )([A-ZÁÉÍÓÚÑ][\w'’-]+)", text)
+    mid = {core(w) for w in found} - common
     mid |= LANGUAGES[lang]["always_proper"]
     for _, variants in concepts:
         for v in variants:
             for w in v.rstrip("*").split():
                 if w[:1].isupper() and w not in common:
-                    mid.add(w)
+                    mid |= {w, core(w)}
     return mid
 
 
 def join_paragraph(paragraph, proper, p=1.0, rnd=None, max_words=400, doubtful=None, lang="es"):
     rnd = rnd or random.Random(7)
     c = LANGUAGES[lang]
-    sentences = re.split(r"(?<=\.) (?=[A-ZÁÉÍÓÚÑ¿¡])", paragraph.strip())
+    sentences = drop_fillers(re.split(r"(?<=\.) (?=[A-ZÁÉÍÓÚÑ¿¡])", paragraph.strip()), lang)
     out = [sentences[0]]
     for s in sentences[1:]:
         prev = out[-1]
         w = s.split()[0]
         base = w.strip(",;:")
-        if (not prev.endswith(".") or prev.endswith("...") or ABBREVIATION.search(prev)
-                or rnd.random() >= p or len(prev.split()) + len(s.split()) > max_words):
+        if (no_period_end(prev) or BARE_NUMBER.match(s) or rnd.random() >= p
+                or len(prev.split()) + len(s.split()) > max_words):
             out.append(s)
             continue
         body = prev[:-1]
@@ -155,9 +239,9 @@ def join_paragraph(paragraph, proper, p=1.0, rnd=None, max_words=400, doubtful=N
         elif base.lower() == c["and"] and base[:1].isupper():
             out[-1] = body + f" {c['and']} " + s[len(w) + 1:]
         else:
-            nxt = s if base in proper else s[0].lower() + s[1:]
-            if doubtful is not None and base not in proper:
-                doubtful.append(base)
+            nxt = s if keeps_capital(base, proper) else lower_first(s)
+            if doubtful is not None and not keeps_capital(base, proper):
+                doubtful.append(core(base))
             out[-1] = body + f" {c['and']} " + nxt
     return " ".join(out)
 
@@ -166,13 +250,13 @@ def join_with_pauses(paragraph, proper, pauses, rnd, doubtful=None, lang="es"):
     """2-3 periods per paragraph instead of one: blocks of uneven length; inside each
     block, sentences that open with a connector keep it after «;», the rest rotate
     among «y» and «;»."""
-    sentences = re.split(r"(?<=\.) (?=[A-ZÁÉÍÓÚÑ¿¡])", paragraph.strip())
+    sentences = drop_fillers(re.split(r"(?<=\.) (?=[A-ZÁÉÍÓÚÑ¿¡])", paragraph.strip()), lang)
     starts = split_blocks(sentences, pauses, rnd, lang) + [len(sentences)]
     blocks = []
     for a, b in zip(starts, starts[1:]):
         out = sentences[a]
         for s in sentences[a + 1:b]:
-            if not out.endswith(".") or out.endswith("...") or ABBREVIATION.search(out):
+            if no_period_end(out) or BARE_NUMBER.match(s):
                 out += " " + s
                 continue
             w = s.split()[0].strip(",;:")
@@ -180,43 +264,67 @@ def join_with_pauses(paragraph, proper, pauses, rnd, doubtful=None, lang="es"):
             if w in LANGUAGES[lang]["but"]:  # «Pero Heráclito…» joins as «, pero Heráclito…»
                 out = out[:-1] + ", " + w.lower() + " " + s[len(s.split()[0]) + 1:]
                 continue
+            if w == LANGUAGES[lang]["and"].capitalize():  # «And so…» joins as «and so…», not «and and»
+                out = out[:-1] + " " + LANGUAGES[lang]["and"] + s[len(w):]
+                continue
             if o:
                 glue = "; "
             else:
                 glue = NEUTRAL[lang][rnd.randrange(len(NEUTRAL[lang]))]
-            if w in proper:
+            if keeps_capital(w, proper):
                 nxt = s
             else:
-                nxt = s[0].lower() + s[1:]
+                nxt = lower_first(s)
                 if doubtful is not None and not o:
-                    doubtful.append(w)
+                    doubtful.append(core(w))
             out = out[:-1] + glue + nxt
         blocks.append(out)
     return " ".join(blocks)
 
 
 def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, lang=None,
-              pauses=None):
+              pauses=None, no_dashes=False, fmt="text", only=None):
     """doubtful: if it is a list, it receives the words that were lowercased without
     appearing that way anywhere else in the text (possible proper nouns).
-    lang: "es", "en" or None to detect it."""
-    lang = lang or detect_language(text)
+    lang: "es", "en" or None to detect it. no_dashes: dashes between words become commas.
+    fmt: "text" (plain text or Markdown) or "latex". only: the paragraph numbers to join
+    (a set), leaving the rest as they are; None joins them all."""
+    frame, paragraphs = blocks.parse(text, fmt)
+    lang = lang or detect_language(" ".join(blocks.prose_of(x, fmt) for x in paragraphs))
     c = LANGUAGES[lang]
     rnd = random.Random(seed)
-    proper = proper_nouns(text, concepts, lang)
-    paragraphs = [x for x in re.split(r"\n\s*\n", text.strip()) if x.strip()]
+    proper = proper_nouns(latex.plain(text) if fmt == "latex" else text, concepts, lang)
     lowered = []
-    if pauses:
-        output = "\n\n".join(join_with_pauses(x, proper, pauses, rnd, lowered, lang)
-                             for x in paragraphs) + "\n"
-    else:
-        output = "\n\n".join(join_paragraph(x, proper, p, rnd, max_words, lowered, lang)
-                             for x in paragraphs) + "\n"
+
+    def prose(x):
+        x = replace_dashes(x) if no_dashes else x
+        if pauses:
+            return join_with_pauses(x, proper, pauses, rnd, lowered, lang)
+        return join_paragraph(x, proper, p, rnd, max_words, lowered, lang)
+
+    def one(x):
+        if fmt != "latex":
+            return prose(x)
+        visible, pieces = latex.protect(x)
+        joined = prose(visible)
+        return x if joined == visible else (latex.restore(joined, pieces) or x)
+
+    out = []
+    for n, x in enumerate(paragraphs, 1):
+        if only is not None and n not in only:
+            out.append(x)
+            continue
+        k = blocks.kind(x, fmt)
+        if k == "list":
+            out.append(blocks.rebuild([(m, one(t) if t else t) for m, t in blocks.items(x, fmt)],
+                                      fmt))
+        else:
+            out.append(one(x) if k == "prose" else x)
+    output = blocks.unparse(frame, out)
     if doubtful is not None:
         words = set(re.findall(r"\w+", text))
         doubtful.extend(sorted({w for w in lowered if w.lower() not in words
-                                and w not in c["common"] | c["no_warn"]
-                                and not re.search(c["suffixes"], w)}))
+                                and w not in c["common"] | c["no_warn"]}))
     return output
 
 
@@ -235,15 +343,28 @@ def main():
     ap.add_argument("--pauses", "--pausas", dest="pauses", type=int,
                     help="leave this many periods per paragraph (2 or 3) in blocks of uneven "
                     "length, instead of joining everything; reads better")
+    ap.add_argument("--only", help="join only these paragraphs (e.g. 4,7), the numbers rewrite.py "
+                    "--only uses; the rest stay as they are")
+    ap.add_argument("--no-dashes", "--sin-rayas", dest="no_dashes", action="store_true",
+                    help="turn dashes between words (—, – and --) into commas; for English text "
+                    "whose author does not use them")
     args = ap.parse_args()
 
-    with open(args.input, encoding="utf-8") as fh:
+    with open(args.input, encoding="utf-8-sig") as fh:
         text = fh.read()
     concepts = check.load_concepts(args.concepts) if args.concepts else []
     doubtful = []
-    lang = args.lang or detect_language(text)
+    fmt = blocks.format_of(args.input)
+    lang = args.lang or detect_language(" ".join(blocks.prose_of(x, fmt)
+                                                 for x in blocks.parse(text, fmt)[1]))
+    try:
+        only = {int(n) for n in args.only.split(",") if n.strip()} if args.only else None
+    except ValueError:
+        print(f"ERROR: --only takes paragraph numbers like 4,7; got {args.only}", file=sys.stderr)
+        return 2
     joined = join_text(text, concepts, args.ratio, max_words=args.max_words, doubtful=doubtful,
-                       lang=lang, pauses=args.pauses)
+                       lang=lang, pauses=args.pauses, no_dashes=args.no_dashes, fmt=fmt,
+                       only=only)
     with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(joined)
     count = lambda t: len(re.findall(r"[.!?](?:\s|$)", t))  # noqa: E731

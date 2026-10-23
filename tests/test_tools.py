@@ -2,6 +2,7 @@
 
     python3 -m unittest discover -s tests -v
 """
+import json
 import os
 import re
 import shutil
@@ -23,11 +24,19 @@ ORIGINAL_EN = os.path.join(EX_EN, "original.txt")
 REWRITTEN_EN = os.path.join(EX_EN, "1-rewritten.txt")
 FINAL_EN = os.path.join(EX_EN, "2-final.txt")
 CONCEPTS_EN = os.path.join(EX_EN, "concepts.txt")
+PAPER = os.path.join(ROOT, "examples", "latex", "paper.tex")
+PAPER_PDF = os.path.join(ROOT, "examples", "latex", "paper.pdf")
+HAS_PDFLATEX = bool(shutil.which("pdflatex"))
+CAN_READ_PDF = bool(shutil.which("pdftotext"))
 
 sys.path.insert(0, SCRIPTS)
+import blocks  # noqa: E402
 import check  # noqa: E402
+import convert  # noqa: E402
 import join  # noqa: E402
+import latex  # noqa: E402
 import rewrite  # noqa: E402
+import tells  # noqa: E402
 
 
 def run(*args, **kw):
@@ -54,11 +63,15 @@ class Check(unittest.TestCase):
         self.assertIn("2-final.txt                    27/27 = 100%", r.stdout)
         self.assertEqual(r.returncode, 0, r.stdout)
 
-    def test_english_example_keeps_every_concept(self):
+    def test_english_example_keeps_every_concept_and_shows_its_added_figure(self):
         r = run(sys.executable, script("check.py"),
                 ORIGINAL_EN, REWRITTEN_EN, FINAL_EN, "--concepts", CONCEPTS_EN)
-        self.assertEqual(r.returncode, 0, r.stdout)
         self.assertNotIn("LOST", r.stdout)
+        # «global pandemic» became «COVID-19 pandemic»: a detail the original never gave
+        self.assertIn("1-rewritten.txt: added 19", r.stdout)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        r = run(sys.executable, script("check.py"), ORIGINAL, REWRITTEN, FINAL, "--concepts", CONCEPTS)
+        self.assertIn("FIGURES: all 2 of the original are in every version, none added.", r.stdout)
 
     def test_detects_lost_concept_and_flipped_negation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -96,6 +109,55 @@ class Check(unittest.TestCase):
             r = run(sys.executable, script("check.py"), ORIGINAL, REWRITTEN, flag)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertIn("concepts (automatic extraction)", r.stdout)
+
+    def test_plurals_comments_and_figures(self):
+        self.assertTrue(check.pattern("policy").search(check.norm("two policies")))
+        self.assertTrue(check.pattern("luz").search(check.norm("las luces")))
+        with tempfile.TemporaryDirectory() as tmp:
+            conc = os.path.join(tmp, "c.txt")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("C# | C sharp   # the language\n# a comment line\n")
+            self.assertEqual(check.load_concepts(conc), [("C#", ["C#", "C sharp"])])
+            a, b = os.path.join(tmp, "a.txt"), os.path.join(tmp, "b.txt")
+            with open(a, "w", encoding="utf-8") as fh:
+                fh.write("In 2020, 60% of the 1,990 staff moved home.\n")
+            with open(b, "w", encoding="utf-8") as fh:
+                fh.write("In 2020, sixty percent of the 1990 staff moved home.\n")
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", conc)
+            self.assertIn("FIGURES that changed", r.stdout)
+            self.assertIn("b.txt: lost 60\n", r.stdout)  # 1,990 = 1990, 2020 stays
+
+    def test_a_lost_negation_is_not_hidden_by_the_same_pair_elsewhere(self):
+        lost = check.negations("No es fácil. Pero no es imposible.") - check.negations(
+            "No es fácil. Pero es imposible.")
+        self.assertEqual(sorted(lost), ["no es"])
+        self.assertEqual(sorted(check.negations("It doesn't apply.") - check.negations("It applies.")),
+                         ["not apply"])
+        self.assertFalse(check.negations("It doesn’t apply.") - check.negations("It does not apply."))
+
+    def test_a_byte_order_mark_does_not_hide_the_first_concept(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            conc, a = os.path.join(tmp, "c.txt"), os.path.join(tmp, "a.txt")
+            with open(conc, "w", encoding="utf-8-sig") as fh:  # as Notepad saves it
+                fh.write("Office\n")
+            with open(a, "w", encoding="utf-8-sig") as fh:
+                fh.write("Moreover, the Office opened.\n")
+            r = run(sys.executable, script("check.py"), a, a, "--concepts", conc)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertNotIn("\ufeff", r.stdout)
+            r = run(sys.executable, script("tells.py"), a)
+            self.assertIn("stock opening", r.stdout)
+
+    def test_figures_are_counted_compared_by_value_and_never_added(self):
+        self.assertEqual(check.numbers_lost("In 2020 and again in 2020.", "In 2020."), ["2020"])
+        self.assertEqual(check.numbers_lost("From 1.5 to 0.50.", "From 15 to 0.5."), ["1.5", "0.50"])
+        self.assertEqual(check.numbers_lost("Hubo 1.990 votos, el 0,05.", "1990 votos; el 0.05."), [])
+        self.assertEqual(check.numbers_lost("Siglo XX, Fase II.", "Siglo X, fase 2."), ["XX", "II"])
+        self.assertEqual(check.numbers_lost("ML and CV methods.", "Learning methods."), [])
+        self.assertEqual(check.numbers_added("Two or three days.", "2 or 3 days, 35% of staff."),
+                         ["35"])
+        self.assertEqual(check.numbers_added("Sixty percent agreed.", "60% agreed."), [])
+        self.assertEqual(check.numbers_added("Dos o tres días.", "2 o 3 días."), [])
 
     def test_missing_file_exits_with_two(self):
         r = run(sys.executable, script("check.py"), ORIGINAL, "does-not-exist.txt")
@@ -141,7 +203,7 @@ class Join(unittest.TestCase):
         self.assertEqual(join.detect_language(t), "en")
         self.assertEqual(join.join_text(t).strip(),
                          "Dr. Smith moved to Boston and the city was cold, but he stayed "
-                         "and I liked it and also the food was great, but winter came.")
+                         "and I liked it and the food was great, but winter came.")
 
     def test_pauses_leave_a_few_periods_and_keep_connectors(self):
         par = ("El ser es. El no-ser no es. Nada nace de la nada. Sin embargo, todo cambia. "
@@ -162,6 +224,133 @@ class Join(unittest.TestCase):
             out = join.join_text(par, pauses=1, seed=seed, lang="es")
             self.assertNotIn("y pero", out)
             self.assertTrue(", pero Heráclito" in out or ". Pero Heráclito" in out, out)
+
+    def test_english_keeps_acronyms_and_initials(self):
+        t = ("AI tools spread fast. COVID-19 changed work. They met John F. Kennedy there. "
+             "Then he left.\n")
+        self.assertEqual(join.join_text(t, lang="en").strip(),
+                         "AI tools spread fast and COVID-19 changed work and they met "
+                         "John F. Kennedy there and then he left.")
+        out = join.join_text(t, pauses=1, lang="en")
+        self.assertNotIn("aI", out)
+        self.assertNotIn("cOVID", out)
+        self.assertIn("John F. Kennedy", out)
+
+    def test_english_drops_filler_openers(self):
+        par = ("Remote work grew fast in 2020. Many firms kept it after the crisis. Moreover, "
+               "commuting time went down for most staff. Workers liked the change a lot. "
+               "Furthermore, offices emptied in big cities. Rents fell in many downtown areas.")
+        for pauses in (None, 1, 2):
+            out = join.join_text(par, pauses=pauses, lang="en")
+            self.assertNotIn("oreover", out)
+            self.assertNotIn("urthermore", out)
+            self.assertNotIn("and also", out)
+            self.assertIn("ommuting time went down", out)
+        self.assertIn("and iPhone sales", join.join_text("Prices fell. Moreover, iPhone sales grew.",
+                                                         lang="en"))
+        self.assertIn("modern art and museums", join.join_text("We saw modern art. Museums "
+                                                               "were full.", lang="en"))
+        # Spanish keeps «Además»: it is ordinary there and was measured that way
+        es = "El turismo crece. Además, la sierra atrae visitantes."
+        self.assertEqual(join.join_text(es, lang="es").strip(),
+                         "El turismo crece y además la sierra atrae visitantes.")
+
+    def test_pauses_join_and_without_a_double_connector(self):
+        par = ("The plan was simple and clear to all. It worked for a year or so. And then "
+               "the money ran out for good. Nobody saw it coming at all. The team moved on. "
+               "Most found new jobs.")
+        for seed in (7, 11, 23):
+            out = join.join_text(par, pauses=1, seed=seed, lang="en")
+            self.assertNotIn("and and", out.lower())
+            self.assertNotIn("; and then", out)
+
+    def test_no_dashes_turns_dashes_into_commas(self):
+        t = ("The new policy — announced without warning — affects thousands of workers. "
+             "The changes -- long overdue -- start in 1990–2000 terms.\n")
+        out = join.join_text(t, lang="en", no_dashes=True)
+        self.assertIn("The new policy, announced without warning, affects", out)
+        self.assertIn("the changes, long overdue, start in 1990–2000 terms", out)
+        dialogue = "—Hola —dijo ella—, ¿vienes?"
+        self.assertEqual(join.replace_dashes(dialogue), dialogue)  # dialogue is left alone
+        self.assertIn(" — ", join.join_text(t, lang="en"))  # off by default
+        self.assertEqual(join.replace_dashes("It is free—on every plan—."), "It is free, on every plan.")
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(t)
+            r = run(sys.executable, script("join.py"), src, "-o", out, "--no-dashes")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn(" — ", read(out))
+
+    def test_a_joined_question_is_lowercased_after_the_mark(self):
+        self.assertEqual(join.join_text("Llegó tarde. ¿Vienes mañana?", lang="es").strip(),
+                         "Llegó tarde y ¿vienes mañana?")
+        self.assertIn("y ¿Juan viene", join.join_text("Llegó tarde. ¿Juan viene?",
+                                                      [("Juan", ["Juan"])], lang="es"))
+
+    def test_markdown_blocks_are_left_alone_and_list_items_joined_one_by_one(self):
+        doc = ("# A Title. With a period\n\n```\nx = 1. Y = 2.\n```\n\n"
+               "- First item. It has two sentences.\n- Second item. Also two.\n\n"
+               "| a. B | c. D |\n\nPlain text. More text.\n")
+        out = join.join_text(doc, lang="en")
+        self.assertIn("# A Title. With a period", out)
+        self.assertIn("```\nx = 1. Y = 2.\n```", out)
+        self.assertIn("- First item and it has two sentences.\n- Second item and also two.", out)
+        self.assertIn("| a. B | c. D |", out)
+        self.assertIn("Plain text and more text.", out)
+
+    def test_initials_dotted_abbreviations_and_numbered_steps_are_not_sentence_ends(self):
+        cases = [
+            ("The Hobbit was written by J.R.R. Tolkien. It was a hit.", "en",
+             "The Hobbit was written by J.R.R. Tolkien and it was a hit."),
+            ("She lives in Washington, D.C. The city is big.", "en",
+             "She lives in Washington, D.C. The city is big."),
+            ("The march was led by Rev. Martin Luther King. It was huge.", "en",
+             "The march was led by Rev. Martin Luther King and it was huge."),
+            ("We met at 9 a.m. Everyone came.", "en", "We met at 9 a.m. Everyone came."),
+            ("Viajó a EE.UU. Allí vivió.", "es", "Viajó a EE.UU. Allí vivió."),
+            ("Lo dice en el libro I, cap. VI de su obra. Es claro.", "es",
+             "Lo dice en el libro I, cap. VI de su obra y es claro."),
+            ("1. Open the box. 2. Remove the tray. 3. Close it.", "en",
+             "1. Open the box. 2. Remove the tray. 3. Close it."),
+        ]
+        for text, lang, expected in cases:
+            for pauses in (None, 1):
+                out = join.join_text(text, lang=lang, pauses=pauses).strip()
+                if pauses is None:
+                    self.assertEqual(out, expected)
+                self.assertNotRegex(out, r"(?:J\.R\.R|D\.C|Rev|a\.m|EE\.UU|cap) (?:and|y) ")
+
+    def test_names_with_a_possessive_or_a_curly_apostrophe_keep_their_capital(self):
+        self.assertIn("and Microsoft's survey", join.join_text(
+            "Sales grew fast. Microsoft's survey said so.", [("Microsoft", ["Microsoft"])], lang="en"))
+        self.assertIn("and I’m tired", join.join_text("It was late. I’m tired.", lang="en"))
+        self.assertIn("and O'Brien came", join.join_text("It was late. O'Brien came.", lang="en"))
+
+    def test_lowercased_names_ending_like_verbs_are_still_reported(self):
+        doubtful = []
+        join.join_text("The trip was long. Italy was nice. Boeing built it.", doubtful=doubtful,
+                       lang="en")
+        self.assertEqual(doubtful, ["Boeing", "Italy"])
+        doubtful = []
+        join.join_text("Javier estaba cansado. Pilar no vino.", doubtful=doubtful, lang="es")
+        self.assertEqual(doubtful, ["Pilar"])
+
+    def test_no_dashes_leaves_ranges_and_line_dashes(self):
+        self.assertEqual(join.replace_dashes("It ran in 1990—2000 and from 1939 – 1945 — mostly."),
+                         "It ran in 1990—2000 and from 1939 – 1945, mostly.")
+        self.assertEqual(join.replace_dashes("Pros:\n— fast\n— cheap"), "Pros:\n— fast\n— cheap")
+        self.assertEqual(join.replace_dashes("Pros: — fast"), "Pros: fast")
+
+    def test_joining_never_changes_a_figure(self):
+        texts = [read(f) for f in (ORIGINAL, REWRITTEN, ORIGINAL_EN, REWRITTEN_EN)]
+        texts.append("Accuracy was 0.50 in 2020. It rose to 0.75 by 2021. The 3 models used "
+                     "1,200 samples. Step 2. Then 3.5% more. Fig. 4 shows it. In 1990–2000 "
+                     "the rate was 7. The rest was 12.")
+        for t in texts:
+            for kw in ({}, {"pauses": 2}, {"no_dashes": True}, {"pauses": 1, "no_dashes": True}):
+                out = join.join_text(t, **kw)
+                self.assertEqual(check.figures(out)[0], check.figures(t)[0], kw)
 
     def test_detects_the_language(self):
         self.assertEqual(join.detect_language(read(ORIGINAL)), "es")
@@ -324,6 +513,258 @@ class Rewrite(unittest.TestCase):
                                                                 "(De Anima, libro i, cap. vi)")),
                          "(invented reference)")
 
+    def test_english_lead_skips_a_filler_opener(self):
+        self.assertEqual(rewrite.build_prompt("Moreover, the food was great today.", lang="en")[1],
+                         "The food")
+        self.assertEqual(rewrite.build_prompt("Moreover, the food was great.")[1], "Moreover, the")
+        self.assertEqual(rewrite.build_prompt("Además, el turismo crece.", lang="es")[1],
+                         "Además, el")
+
+    def test_context_grows_with_long_paragraphs(self):
+        self.assertEqual(rewrite.context_size("una dos tres", 109), 4096)
+        long = " ".join(["palabra"] * 1500)
+        n = 1500 * 3 + 100
+        self.assertGreaterEqual(rewrite.context_size(long, n), 2 * 1500 + n)
+        self.assertEqual(rewrite.context_size(long, n) % 1024, 0)
+
+    def test_words_made_of_roman_letters_are_not_references(self):
+        o = "La ley cambió el derecho en el siglo XX."
+        for r in ("La ley (civil) cambió el derecho en el siglo XX.",
+                  "The law (I think) changed it in the XX century.",
+                  "Una mezcla (mix) de leyes cambió el derecho en el siglo XX."):
+            self.assertIsNone(rewrite.citation_problem(o, r), r)
+        for r in ("La ley cambió el derecho (De Anima, libro i, cap. vi).",
+                  "La ley cambió el derecho (vol. XII).", "La ley cambió (2019)."):
+            self.assertEqual(rewrite.citation_problem(o, r), "(invented reference)", r)
+
+    def test_a_failing_llama_is_reported_not_taken_for_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "broken_llama.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nsys.stderr.write('error: invalid argument: -dev\\n')\n"
+                         "sys.exit(3)\n")
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("El turismo en la sierra crece cada año con más visitantes.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "2", env=env)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("exited with code 3", r.stderr)
+            self.assertIn("invalid argument: -dev", r.stderr)
+            self.assertNotIn("truncated", r.stdout)
+
+    def test_only_and_lead_are_checked_before_running(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = self._fake_llama(tmp)
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Uno dos tres cuatro.\n\nCinco seis siete ocho.\n")
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("Uno.\n\nDos.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            for only, message in (("5", "has 2 paragraphs"), ("a", "paragraph numbers")):
+                r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--only", only,
+                        env=env)
+                self.assertEqual(r.returncode, 2)
+                self.assertIn(message, r.stderr)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--lead", "Desde la",
+                    env=env)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("--lead needs --only", r.stderr)
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("Uno.\n")
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--take", "1=" + src,
+                    env=env)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("same count", r.stderr)
+
+    def test_max_tells_retries_and_keeps_the_try_with_fewest(self):
+        text = ("Remote work changed how many offices plan their weeks, and teams now meet in "
+                "person on fewer days while the rest of the work happens from home.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "tell_llama.py")
+            calls = os.path.join(tmp, "calls")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write(
+                    "import os, sys\n"
+                    f"c = {calls!r}\n"
+                    "n = int(open(c).read()) + 1 if os.path.exists(c) else 1\n"
+                    "open(c, 'w').write(str(n))\n"
+                    "outs = {1: ' work plays a crucial role in the pivotal plans of offices, and'\n"
+                    "           ' crews gather on fewer days while the rest gets done at home.',\n"
+                    "        2: ' work reshaped the weekly plans of offices and crucially crews'\n"
+                    "           ' gather on fewer days, while the rest gets done at home now.',\n"
+                    "        3: ' work altered how offices plan the week: crews gather on fewer'\n"
+                    "           ' days in person and the rest of the job gets done at home.'}\n"
+                    "sys.stdout.write(outs[min(n, 3)] + '\\n</target_text>')\n")
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "2",
+                    "--max-tells", "0", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("crucially", read(out))  # the second try: one tell, not three
+            self.assertIn("every try kept AI tells", r.stdout)
+            os.remove(calls)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "3",
+                    "--max-tells", "0", env=env)
+            self.assertIn("altered how offices", read(out))
+            self.assertIn("done, try 3", r.stdout)
+
+    def _scripted_llama(self, tmp, script):
+        """A fake llama that answers from `script`: {opening words: [answer per call]}."""
+        for f in (rewrite.BASE, rewrite.ADAPTER):
+            open(os.path.join(tmp, f), "w").close()
+        fake = os.path.join(tmp, "scripted_llama.py")
+        with open(fake, "w", encoding="utf-8") as fh:
+            fh.write(
+                "import json, os, sys\n"
+                "args = sys.argv[1:]\n"
+                "prompt = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                "src = prompt.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+                f"script = json.loads({json.dumps(json.dumps(script))})\n"
+                f"log = {os.path.join(tmp, 'log')!r}\n"
+                "with open(log, 'a', encoding='utf-8') as fh: fh.write(src[:20] + '\\n')\n"
+                "key = next(k for k in script if src.startswith(k))\n"
+                "n = sum(1 for ln in open(log, encoding='utf-8') if ln.startswith(src[:20]))\n"
+                "out = script[key][min(n, len(script[key])) - 1]\n"
+                "sys.stdout.buffer.write((out + '\\n</target_text>').encode('utf-8'))\n")
+        return fake
+
+    def _run_scripted(self, text, answers, *extra):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        fake = self._scripted_llama(tmp, answers)
+        src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+        r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--threads", "1",
+                *extra, env=env)
+        log = os.path.join(tmp, "log")
+        calls = read(log).splitlines() if os.path.exists(log) else []
+        return r, (read(out) if os.path.exists(out) else ""), calls
+
+    def test_markdown_code_and_headings_stay_and_lists_keep_their_items(self):
+        text = ("## Working from home\n\n"
+                "```bash\npython3 install.py\n\nls\n```\n\n"
+                "- Remote teams now meet in person on fewer days than before the change came.\n"
+                "- Offices are planned around the weeks when the whole staff comes in.\n"
+                "- Short item\n")
+        script_ = {"Remote teams": [" gather in person less often than they did before that shift."],
+                   "Offices are": [" now arranged around those weeks when everybody shows up at once."]}
+        r, out, calls = self._run_scripted(text, script_, "--tries", "1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(calls), 2, calls)  # only the two list items reached the model
+        self.assertEqual(out, "## Working from home\n\n```bash\npython3 install.py\n\nls\n```\n\n"
+                              "- Remote teams gather in person less often than they did before that shift.\n"
+                              "- Offices are now arranged around those weeks when everybody shows up at once.\n"
+                              "- Short item\n")
+        self.assertIn("kept (code)", r.stdout)
+        self.assertIn("list, 2 of 3 items rewritten", r.stdout)
+
+    def test_a_dropped_figure_is_retried_then_kept_with_a_warning(self):
+        text = "Sales grew 40% in 2021 across all of the regions that we serve today.\n"
+        lost = " a great deal in 2021 across every region that we serve right now."
+        good = " by 40% in 2021 across every region that the company serves now."
+        r, out, _ = self._run_scripted(text, {"Sales grew": [lost, good]}, "--tries", "2")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("by 40% in 2021", out)
+        self.assertIn("done, try 2", r.stdout)
+        r, out, _ = self._run_scripted(text, {"Sales grew": [lost]}, "--tries", "1")
+        self.assertIn("a great deal in 2021", out)  # kept, with the figure to put back named
+        self.assertIn("Put the figure back by hand", r.stdout)
+        self.assertIn("1 (40)", r.stdout)
+        self.assertEqual(rewrite.numbers_lost("Hubo 1.990 votos en 2020.", "En 2020, 1990 votos."), [])
+
+    def test_a_changed_link_or_inline_code_is_never_used(self):
+        text = ("Read the guide at https://example.com/docs and run `pip install x` before you "
+                "start the install on your own machine.\n")
+        bad = (" manual at https://example.org/docs and run `pip install x` before starting the "
+               "installation on the computer you use.")
+        good = (" manual at https://example.com/docs and run `pip install x` before starting the "
+                "installation on the computer you use.")
+        r, out, _ = self._run_scripted(text, {"Read the": [bad, good]}, "--tries", "2")
+        self.assertIn("example.com/docs", out)
+        self.assertIn("done, try 2", r.stdout)
+        self.assertEqual(rewrite.markup_problem(text, text.replace("`pip install x`", "pip")),
+                         "(link or code changed)")
+        self.assertIsNone(rewrite.markup_problem("Write to ana@example.com today.",
+                                                 "Send it to ana@example.com now."))
+
+    def test_take_warns_when_a_candidate_changed_a_figure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out, cand = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Sales rose 5% in 2020 across the region.\n")
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("Sales went up 5% in 2020 in the region.\n")
+            with open(cand, "w", encoding="utf-8") as fh:
+                fh.write("Sales went up 6% in 2020 in the region.\n")  # edited by hand
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--take", "1=" + cand)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("lost the figures 5; adds the figures 6", r.stdout)
+
+    def test_take_keeps_the_lines_of_a_list_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out, cand = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Intro text here.\n\n- one thing here.\n- two things here.\n")
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("Intro rewritten.\n\n- one.\n- two.\n")
+            with open(cand, "w", encoding="utf-8") as fh:
+                fh.write("- first thing.\n- second thing.\n")
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--take", "2=" + cand)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(read(out), "Intro rewritten.\n\n- first thing.\n- second thing.\n")
+
+    def test_quotes_pair_in_order_and_ignore_the_apostrophe_style(self):
+        o = 'Critics called the plan "naive" while supporters described it as "bold".'
+        self.assertEqual(rewrite.quotations(o), [])
+        self.assertIsNone(rewrite.citation_problem(o, 'Critics said "naive"; backers said "bold".'))
+        self.assertIsNone(rewrite.citation_problem("“It’s over now, my friends.”",
+                                                   'He said "It\'s over now, my friends."'))
+        self.assertIsNone(rewrite.citation_problem("Use grew (from 5% to 30% in two years).",
+                                                   "Use grew (from 5% to 30% within two years)."))
+        self.assertEqual(rewrite.citation_problem("Smith wrote it.", "Smith wrote it (Jones, 2019)."),
+                         "(invented reference)")
+
+    def test_a_url_in_angle_quotes_may_lose_its_quotes(self):
+        self.assertIsNone(rewrite.markup_problem("Ver «https://ejemplo.org/guia» hoy.",
+                                                 "Mira https://ejemplo.org/guia hoy."))
+
+    def test_the_percent_sign_goes_back_to_the_right_figure(self):
+        self.assertEqual(rewrite.restore_percent_signs("It is 60%.", "It is 60 percent."),
+                         "It is 60 percent.")
+        self.assertEqual(rewrite.restore_percent_signs("Es 60%.", "Es 60 por ciento."),
+                         "Es 60 por ciento.")
+        self.assertEqual(rewrite.restore_percent_signs("In the 5 years, sales fell 5%.",
+                                                       "Over the 5 years sales dropped 5."),
+                         "Over the 5 years sales dropped 5%.")
+
+    def test_bullets_of_six_words_or_more_are_rewritten(self):
+        text = "- Faster page loads with optimized image caching\n- Fast setup\n"
+        answers = {"Faster page": [" now load quicker thanks to smarter image caching."]}
+        r, out, calls = self._run_scripted(text, answers, "--tries", "1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(out, "- Faster page now load quicker thanks to smarter image caching.\n"
+                              "- Fast setup\n")
+
+    def test_a_try_that_adds_or_changes_a_figure_is_never_used(self):
+        text = "Accuracy reached 0.50 on the test set after training for many more epochs.\n"
+        bad = [" 0.5 on the test set once training ran for many further epochs.",
+               " 0.50 on the test set in 2021 once training ran for many further epochs."]
+        good = " 0.50 on the test set once training ran for many further epochs."
+        r, out, _ = self._run_scripted(text, {"Accuracy reached": bad + [good]}, "--tries", "3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(out.strip(), "Accuracy reached" + good)
+        self.assertIn("done, try 3", r.stdout)
+
     def _echo_llama(self, tmp):
         """A fake llama that writes back a different, faithful version each call."""
         for f in (rewrite.BASE, rewrite.ADAPTER):
@@ -341,7 +782,7 @@ class Rewrite(unittest.TestCase):
                 "open(c, 'w').write(str(n))\n"
                 "words = ['la semilla crece despacio', 'el árbol nace de la semilla',\n"
                 "         'de la semilla sale un árbol']\n"
-                "body = ' ' + words[n % 3] + ' y el lead fue ' + lead.replace(' ', '_') + ' en la vuelta ' + str(n) + ' del bosque.'\n"
+                "body = ' ' + words[n % 3] + ' y el lead fue ' + lead.replace(' ', '_') + ' en la vuelta ' + 'abcdefghijklmnopqrst'[n] + ' del bosque.'\n"
                 "sys.stdout.buffer.write((body + '\\n</target_text>').encode('utf-8'))\n")
         return fake
 
@@ -366,6 +807,8 @@ class Rewrite(unittest.TestCase):
             self.assertTrue(first.startswith("Desde la "), first)
             self.assertIn("Desde_la", first)  # the lead reached the prompt
             self.assertEqual(read(out), "Primero, ya corregido.\n\nSegundo, ya corregido.\n")
+            self.assertIn("tells 0", r.stdout)
+            self.assertIn("fewest tells first", r.stdout)
             r = run(sys.executable, script("rewrite.py"), src, "-o", out,
                     "--take", "1=" + os.path.join(folder, files[1]), env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -432,6 +875,441 @@ class Rewrite(unittest.TestCase):
                     "-o", os.path.join(tmp, "x.txt"), env=env)
             self.assertEqual(r.returncode, 2)
             self.assertIn("ERROR", r.stderr)
+
+
+class Tells(unittest.TestCase):
+    # Before/after pairs from github.com/blader/humanizer (MIT, © 2025 Siqi Chen)
+    PAIRS = [
+        ("It's not just about the beat riding under the vocals; it's part of the aggression "
+         "and atmosphere. It's not merely a song, it's a statement.",
+         "The heavy beat adds to the aggressive tone."),
+        ("The real question is whether teams can adapt. At its core, what really matters is "
+         "organizational readiness.",
+         "The question is whether teams can adapt. That mostly depends on whether the "
+         "organization is ready to change its habits."),
+        ("Great question! Here is an overview of the French Revolution. It began in 1789 when a "
+         "financial crisis and food shortages led to widespread unrest. I hope this helps! Let "
+         "me know if you'd like me to expand on any section.",
+         "The French Revolution began in 1789 when a financial crisis and food shortages led to "
+         "widespread unrest."),
+        ("The Statistical Institute of Catalonia was officially established in 1989, marking a "
+         "pivotal moment in the evolution of regional statistics in Spain.",
+         "The Statistical Institute of Catalonia was established in 1989, part of a wider "
+         "decentralization of administrative functions in Spain."),
+    ]
+
+    def test_flags_ai_prose_and_not_its_human_rewrite(self):
+        for before, after in self.PAIRS:
+            self.assertGreaterEqual(tells.score(before, "en"), tells.STRONG, before)
+            self.assertEqual(tells.score(after, "en"), 0, (after, tells.find(after, "en")))
+
+    def test_quotations_are_not_the_author_s(self):
+        self.assertEqual(tells.score('She called it "a testament to the age" and left.', "en"), 0)
+        self.assertGreater(tells.score("She called it a testament to the age and left.", "en"), 0)
+
+    def test_spanish_tells_and_the_word_potencia(self):
+        self.assertGreaterEqual(tells.score("La ética juega un papel crucial en la vida.", "es"),
+                                tells.STRONG)
+        self.assertEqual(tells.score("La bellota tiene la potencia de ser encina.", "es"), 0)
+
+    def test_the_rewrite_of_the_english_example_has_fewer_tells(self):
+        total = lambda f: sum(s for _, s, _ in tells.report(tells.paragraphs_of(read(f)), "en"))  # noqa: E731
+        self.assertLess(total(REWRITTEN_EN), total(ORIGINAL_EN))
+
+    def test_suggests_a_lead_after_a_stock_connector(self):
+        self.assertEqual(tells.suggested_lead("Furthermore, companies that embrace it win."),
+                         "Companies that")
+        self.assertEqual(tells.suggested_lead("Looking ahead, the future of work changes."),
+                         "The future")
+        self.assertIsNone(tells.suggested_lead("One of the most important problems is time."))
+
+    def test_formatting_tells_and_markdown_blocks(self):
+        doc = ("## 🚀 Strategic Negotiations And Global Partnerships\n\n"
+               "She noted the door. She noted the lock. She filed both away for later.\n\n"
+               "- **User Experience:** The interface is new.\n- 💡 **Key Insight:** Users want less.\n\n"
+               "```\nWe delve into the tapestry here.\n```\n")
+        parts = tells.paragraphs_of(doc)
+        self.assertEqual(len(parts), 4)
+        labels = [label for label, _, _ in tells.formatting(parts[0])]
+        self.assertIn("emoji", labels)
+        self.assertIn("Title Case heading", labels)
+        self.assertEqual([label for label, _, _ in tells.formatting(parts[2])].count("bold label"), 2)
+        self.assertIn("repeated opening", [label for label, _, _ in tells.find(parts[1], "en")])
+        self.assertEqual(tells.score("The cat sat. The dog ran. The bird flew away.", "en"), 0)
+        numbers = [i for i, _, _ in tells.report(parts, "en")]
+        self.assertEqual(numbers, [2, 3])  # the heading and the code are not prose
+        self.assertEqual(tells.formatting("## How the six options compare"), [])
+
+    def test_ordinary_human_prose_is_not_flagged(self):
+        for text, lang in [("The files were not publicly disclosed until 2019.", "en"),
+                           ("Let me know if Tuesday works for you.", "en"),
+                           ("No dudes en escribirme si necesitas algo.", "es"),
+                           ("El autor —según dice— vino tarde, y su hermano —el mayor— también.", "es"),
+                           ("The Old Testament and the New Testament differ.", "en"),
+                           ("Kids in foster care need foster parents.", "en"),
+                           ("We use robust standard errors that align with the literature.", "en"),
+                           ("Queremos fomentar el empleo y potenciar la industria.", "es")]:
+            self.assertFalse(tells.flagged(tells.find(text, lang)), (text, tells.find(text, lang)))
+        self.assertTrue(tells.flagged(tells.find("Ultimately, there is no one-size-fits-all answer.", "en")))
+
+    def test_long_pathological_input_stays_fast(self):
+        import time
+        t0 = time.time()
+        tells.find("a-" * 8000, "en")
+        tells.find("“" * 30000 + "x" * 30000, "en")
+        rewrite.quotations("“" * 30000 + "x" * 30000)
+        self.assertLess(time.time() - t0, 5)
+
+    def test_cli_names_the_paragraphs_to_regenerate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "text.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("A title\n\nThe cat sat on the mat and it was happy all day.\n\n"
+                         "Furthermore, the dog plays a crucial role in the house as well.\n")
+            r = run(sys.executable, script("tells.py"), src)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("--only 3 --candidates 6", r.stdout)
+            self.assertIn('--lead "The dog"', r.stdout)
+            r = run(sys.executable, script("tells.py"), src, "--max", "2")
+            self.assertEqual(r.returncode, 1)
+            r = run(sys.executable, script("tells.py"), ORIGINAL_EN, REWRITTEN_EN)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("total", r.stdout)
+
+
+class Blocks(unittest.TestCase):
+    DOC = ("# Title\n\nIntro paragraph. It has two sentences.\n\n```python\nx = 1\n\ny = 2\n```\n\n"
+           "- **Speed:** pages load faster.\n- Second item that wraps\n  onto a second line.\n\n"
+           "| a | b |\n|---|---|\n\n> A quote here.\n\n    indented code\n    more code\n\n---\n\nLast paragraph.\n")
+
+    def test_kinds_and_a_fence_with_blank_lines_stays_one_block(self):
+        got = [blocks.kind(b) for b in blocks.split(self.DOC)]
+        self.assertEqual(got, ["heading", "prose", "code", "list", "table", "quote", "code",
+                               "rule", "prose"])
+        self.assertEqual(blocks.split(self.DOC)[2], "```python\nx = 1\n\ny = 2\n```")
+
+    def test_an_indented_first_line_is_a_paragraph_not_code(self):
+        essay = "\tMoreover, the results came quickly.\n\n\tThe second paragraph follows here.\n"
+        self.assertEqual([blocks.kind(b) for b in blocks.split(essay)], ["prose", "prose"])
+        self.assertEqual(blocks.split(essay)[0], "Moreover, the results came quickly.")
+
+    def test_list_items_keep_markers_and_join_continuations(self):
+        lst = blocks.split(self.DOC)[3]
+        pairs = blocks.items(lst)
+        self.assertEqual(pairs, [("- ", "**Speed:** pages load faster."),
+                                 ("- ", "Second item that wraps onto a second line.")])
+        self.assertEqual(blocks.rebuild(pairs),
+                         "- **Speed:** pages load faster.\n- Second item that wraps onto a second line.")
+        self.assertEqual(blocks.items("1. One.\n2) Two.\n- [x] Done."),
+                         [("1. ", "One."), ("2) ", "Two."), ("- [x] ", "Done.")])
+
+    def test_fences_close_their_block_and_an_intro_line_leads_its_list(self):
+        got = blocks.split("Run this:\n```\nls\n```\nThen read the output. It is short.\n")
+        self.assertEqual(got, ["Run this:", "```\nls\n```", "Then read the output. It is short."])
+        intro = "Three things matter:\n- the price of the plan.\n- the time it takes."
+        self.assertEqual(blocks.kind(intro), "list")
+        self.assertEqual(blocks.items(intro)[0], ("", "Three things matter:"))
+        self.assertEqual(blocks.kind("Hi John,\nthanks for the call.\n- not a list here"), "prose")
+
+    def test_plain_paragraphs_split_as_before(self):
+        for f in (ORIGINAL, REWRITTEN, ORIGINAL_EN, REWRITTEN_EN):
+            text = read(f)
+            self.assertEqual(blocks.split(text),
+                             [x.strip() for x in re.split(r"\n\s*\n", text) if x.strip()])
+
+
+REVERSING_LLAMA = (
+    "import re, sys\n"
+    "args = sys.argv[1:]\n"
+    "prompt = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+    "src = prompt.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+    "rest = ' '.join(src.split()[2:])\n"
+    "# every word changes; placeholders, figures and punctuation stay\n"
+    "out = re.sub(r'[A-Za-z]{2,}', lambda m: m.group(0)[::-1], rest)\n"
+    "sys.stdout.buffer.write((' ' + out + '\\n</target_text>').encode('utf-8'))\n")
+
+
+class Latex(unittest.TestCase):
+    def test_parse_and_unparse_give_the_file_back(self):
+        texts = [read(PAPER), "No document environment. Just text.\n\nSecond.\n",
+                 "\\begin{document}\n\\iffalse\nhidden\n\\fi\nText $x$.\n\\[ y \\]\nMore.\n"
+                 "$$ z $$\n% c\n\\begin{itemize}\n\\item a \\begin{enumerate}\\item b\\end{enumerate}\n"
+                 "\\end{itemize}\n\\end{document}\n"]
+        for t in texts:
+            frame, paras = latex.parse(t)
+            self.assertEqual(latex.unparse(frame, paras), t)
+        _, paras = latex.parse(texts[2])
+        self.assertEqual(paras, ["Text $x$.", "More."])  # \iffalse, math, nested list kept
+
+    def test_the_paper_prose_is_found_and_the_rest_is_frame(self):
+        frame, paras = latex.parse(read(PAPER))
+        self.assertEqual(len(paras), 7)
+        self.assertTrue(paras[0].startswith("Remote work has fundamentally"))  # the abstract
+        self.assertTrue(latex.is_list(paras[3]))
+        body = "".join(frame)
+        for kept in ("\\begin{equation}", "\\begin{table}", "\\begin{figure}", "\\section{Method}",
+                     "\\begin{thebibliography}", "% Preamble comment"):
+            self.assertIn(kept, body)
+
+    def test_protect_and_restore(self):
+        p = ("Prior work by Mart\\'{\\i}nez et al.~\\cite{m19} used $y = \\beta x$ and 60\\% of "
+             "``data'' --- see Fig.~\\ref{f}. % note\nNext \\emph{line} here.")
+        visible, pieces = latex.protect(p)
+        self.assertEqual(visible, "Prior work by Martínez et al. [1] used [2] and 60% of “data” — "
+                                  "see Fig. [3]. [4] Next [5] here.")
+        back = latex.restore(visible, pieces)
+        self.assertIn("Martínez et al.~\\cite{m19} used $y = \\beta x$ and 60\\% of ``data'' --- see "
+                      "Fig.~\\ref{f}. % note\n", back)
+        self.assertIn("Next \\emph{line} here.", back)
+        self.assertEqual(latex.problem(visible, visible.replace(" [2]", ""), pieces), "(LaTeX changed)")
+        self.assertEqual(latex.problem(visible, visible + " [2]", pieces), "(LaTeX changed)")
+        self.assertEqual(latex.problem(visible, visible + " [9]", pieces), "(LaTeX changed)")
+        self.assertEqual(latex.problem(visible, visible + " \\bf", pieces), "(LaTeX changed)")
+        self.assertIsNone(latex.problem(visible, "[3] and [1] [2] [4] [5] moved.", pieces))
+
+    def test_verb_and_control_spaces(self):
+        visible, pieces = latex.protect("Run \\verb|a b| as shown, e.g.\\ the default.")
+        self.assertEqual(visible, "Run [1] as shown, e.g. the default.")
+        self.assertEqual(pieces[1], "\\verb|a b|")
+
+    def test_sentences_go_on_their_own_line_but_not_inside_math_or_comments(self):
+        t = "One sentence here. Two by Smith et al. Three $a. B$ four. % x. Y\nFive."
+        self.assertEqual(latex.sentence_lines(t),
+                         "One sentence here.\nTwo by Smith et al. Three $a. B$ four. % x. Y\nFive.")
+
+    def _rewrite_paper(self, tmp, *extra):
+        for f in (rewrite.BASE, rewrite.ADAPTER):
+            open(os.path.join(tmp, f), "w").close()
+        fake = os.path.join(tmp, "reversing_llama.py")
+        with open(fake, "w", encoding="utf-8") as fh:
+            fh.write(REVERSING_LLAMA)
+        src, out = os.path.join(tmp, "paper.tex"), os.path.join(tmp, "01-rewritten.tex")
+        shutil.copy(PAPER, src)
+        env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+        r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                "--threads", "1", *extra, env=env)
+        return r, src, out
+
+    def test_rewrite_and_join_a_paper_keep_its_latex_and_every_figure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            r, src, out = self._rewrite_paper(tmp)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("Paragraph 4 of 7: list, 2 of 2 items rewritten", r.stdout)
+            original, rewritten = read(src), read(out)
+            self.assertEqual(latex.parse(rewritten)[0], latex.parse(original)[0])  # frame
+            self.assertIn("degnahc", rewritten)  # the prose did change
+            for kept in ("~\\cite{smith2020,lee2021}", "~\\ref{fig:trend}", "$y = \\alpha + \\beta x$",
+                         "12\\% ni 2019", "\\emph{14}", "~\\eqref{eq:main}", "% TODO: update\n"):
+                self.assertIn(kept, rewritten)
+            final = os.path.join(tmp, "02-final.tex")
+            r = run(sys.executable, script("join.py"), out, "-o", final, "--pauses", "2")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            r = run(sys.executable, script("check.py"), src, out, final)
+            self.assertIn("FIGURES: all 45 of the original are in every version, none added.", r.stdout)
+            if HAS_PDFLATEX:
+                pdf = os.path.join(tmp, "final.pdf")
+                r = run(sys.executable, script("convert.py"), final, "-o", pdf)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_try_that_breaks_a_placeholder_is_not_used(self):
+        text = ("\\begin{document}\nPrior work by Smith~\\cite{s20} measured the output of "
+                "teams with a model $y = x$ over many years.\n\\end{document}\n")
+        dropped = " by Smith measured how teams produce with a model [2] across many years."
+        good = " by Smith [1] measured how teams produce with a model [2] across many years."
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Rewrite._scripted_llama(self, tmp, {"Prior work": [dropped, good]})
+            src, out = os.path.join(tmp, "in.tex"), os.path.join(tmp, "out.tex")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "2", env=env)
+            self.assertIn("done, try 2", r.stdout)
+            self.assertIn("Prior work by Smith~\\cite{s20} measured how teams produce with a model "
+                          "$y = x$ across many years.", read(out))
+
+    def test_tells_and_check_read_the_prose_of_a_paper(self):
+        r = run(sys.executable, script("tells.py"), PAPER)
+        self.assertIn("fundamentally reshaped", r.stdout)
+        self.assertIn("00-original.tex -o 01-rewritten.tex", r.stdout)
+        self.assertNotIn("alpha", r.stdout)
+        with tempfile.TemporaryDirectory() as tmp:
+            conc = os.path.join(tmp, "c.txt")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("Martínez\n")
+            r = run(sys.executable, script("check.py"), PAPER, PAPER, "--concepts", conc)
+            self.assertEqual(r.returncode, 0, r.stdout)  # «Mart\\'{\\i}nez» is «Martínez»
+
+
+class Convert(unittest.TestCase):
+    PAGES = ["Journal of Tests 12 (2026)\nAn Interesting Title\nAbstract\nRemote work has changed "
+             "how teams plan their weeks, and the effect on inter-\nnational firms is large. The "
+             "self-reported output rose by 7.5% in 2021.\n\x88 A first item of the list here.\n"
+             "\x88 A second item of the list here.\ny = α + βx\n(1)\n2\nResults\nThe cost "
+             "was\n38\n1\n",
+             "Journal of Tests 12 (2026)\nThis paragraph continues the page and ends with a full "
+             "stop after all these words.\n2\n",
+             "Journal of Tests 12 (2026)\nReferences\n[1] J. Smith. Working apart. 2020.\n3\n"]
+
+    def test_text_from_pdf_pages(self):
+        md = convert.pdf_to_text(self.PAGES)
+        self.assertNotIn("Journal of Tests", md)  # running header
+        self.assertIn("## Abstract", md)
+        self.assertIn("the effect on international firms is large. The self-reported output", md)
+        self.assertIn("- A first item of the list here.\n- A second item of the list here.", md)
+        self.assertIn("```text\ny = α + βx\n(1)\n```", md)
+        self.assertIn("## References\n\n```text\n[1] J. Smith. Working apart. 2020.\n```", md)
+        self.assertNotRegex(md, r"(?m)^[123]$")  # page numbers
+        self.assertIn("## 2 Results", md)  # a section number is not a page number
+        self.assertIn("38", md)  # nor is a lone figure in a table
+        removed = []
+        md = convert.pdf_to_text(self.PAGES, removed)
+        self.assertEqual(removed.count("Journal of Tests 12 (2026)"), 3)
+        lost = check.numbers_lost(convert.normalize("\n".join(self.PAGES)), md)
+        self.assertEqual(sorted(lost), sorted(check.numbers_lost("\n".join(removed), "")))
+
+    def test_text_to_latex_escapes_and_keeps_structure(self):
+        tex = convert.text_to_latex("## Results\n\nCost: $5 & 10% of R_t, with α ≤ 0.5.\n\n"
+                                    "- one item here\n- two\n\n```text\n[1] Ref. 2020\n```\n")
+        self.assertIn("\\section*{Results}", tex)
+        self.assertIn("Cost: \\$5 \\& 10\\% of R\\_t, with \\ensuremath{\\alpha} \\ensuremath{\\leq} 0.5.", tex)
+        self.assertIn("\\begin{itemize}\n  \\item one item here\n  \\item two\n\\end{itemize}", tex)
+        self.assertIn("\\ttfamily\n[1] Ref. 2020\n", tex)
+        self.assertEqual(convert.escape("CO₂ and x⁴"), "CO\\textsubscript{2} and x\\textsuperscript{4}")
+
+    @unittest.skipUnless(CAN_READ_PDF, "needs pdftotext")
+    def test_the_example_pdf_comes_back_as_its_prose(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "paper.md")
+            r = run(sys.executable, script("convert.py"), PAPER_PDF, "-o", md)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            text = read(md)
+            self.assertIn("Prior work by Martínez et al. [3] measured output", text)
+            self.assertIn("- A panel of 1,200 employees observed over 24 months in 14 firms.", text)
+            self.assertIn("## References", text)
+            if HAS_PDFLATEX:
+                pdf = os.path.join(tmp, "back.pdf")
+                r = run(sys.executable, script("convert.py"), md, "-o", pdf)
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                self.assertGreater(os.path.getsize(pdf), 1000)
+
+    @unittest.skipUnless(CAN_READ_PDF and HAS_PDFLATEX, "needs pdftotext and pdflatex")
+    def test_every_figure_of_the_text_is_in_the_pdf_made_from_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            md, pdf = os.path.join(tmp, "a.md"), os.path.join(tmp, "a.pdf")
+            with open(md, "w", encoding="utf-8") as fh:
+                fh.write("## 1 Results\n\nCO₂ fell 5% to 0.50 in 2020, with α = 0.05.\n\n"
+                         "- 1,200 people in 14 firms\n\n```text\n38  90\n```\n")
+            r = run(sys.executable, script("convert.py"), md, "-o", pdf)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(convert.figures_missing_from_pdf(read(md), pdf), [])
+
+    def test_without_an_engine_it_says_what_to_do(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            md = os.path.join(tmp, "a.md")
+            with open(md, "w", encoding="utf-8") as fh:
+                fh.write("Some text.\n")
+            r = run(sys.executable, script("convert.py"), md, "-o", os.path.join(tmp, "a.pdf"),
+                    env=dict(os.environ, PATH=tmp))
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("Overleaf", r.stderr)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "a.tex")))
+            r = run(sys.executable, script("convert.py"), PAPER_PDF, "-o", os.path.join(tmp, "b.pdf"))
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("goes to text first", r.stderr)
+
+
+class Prose(unittest.TestCase):
+    """The Claude pipeline: the agent rewrites the units of a work file; import guards them."""
+
+    def _export(self, tmp, src_text, ext):
+        src = os.path.join(tmp, "00-original" + ext)
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(src_text)
+        work = os.path.join(tmp, "01-prose.txt")
+        r = run(sys.executable, script("prose.py"), "export", src, "-o", work)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return src, work
+
+    def _import(self, tmp, src, work, *extra):
+        out = os.path.join(tmp, "02-final" + os.path.splitext(src)[1])
+        r = run(sys.executable, script("prose.py"), "import", src, work, "-o", out, *extra)
+        return r, (read(out) if os.path.exists(out) else "")
+
+    def test_export_holds_only_the_prose(self):
+        md = ("# Title\n\nRemote work grew fast in 2020 across all the regions.\n\n```\ncode 1\n```\n\n"
+              "- A first bullet that has enough words to rewrite.\n- Short one\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            _, work = self._export(tmp, md, ".md")
+            body = read(work)
+            self.assertIn("=== 2 ===\nRemote work grew fast in 2020 across all the regions.", body)
+            self.assertIn("=== 4.1 ===\nA first bullet that has enough words to rewrite.", body)
+            self.assertNotIn("code 1", body)
+            self.assertNotIn("Short one", body)
+            self.assertNotIn("=== 1 ===", body)  # the heading
+            src, work = self._export(tmp, read(PAPER), ".tex")
+            self.assertEqual(len(re.findall(r"(?m)^=== ", read(work))), 8)
+            self.assertIn("plan collaboration [1]. As shown in Fig. [2]", read(work))
+
+    def test_an_unchanged_work_file_gives_the_paper_back_byte_for_byte(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, work = self._export(tmp, read(PAPER), ".tex")
+            r, out = self._import(tmp, src, work)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(out, read(PAPER))
+            self.assertIn("unchanged", r.stdout)
+
+    def test_import_guards_every_unit(self):
+        text = ("Sales rose 5% in 2020 across the region, as \"the report clearly says\" here.\n\n"
+                "Microsoft Teams became the main tool for most of the remote teams we studied.\n\n"
+                "Read https://example.com/guide before you install the tool on your machine.\n\n"
+                "The survey covered 1,200 people in 14 firms over two full years of work.\n")
+        work_text = ("=== 1 ===\nIn 2020 sales went up 6% in the region, as \"the report clearly says\" here.\n\n"
+                     "=== 2 ===\nTeams became the tool most of the remote groups we looked at used.\n\n"
+                     "=== 3 ===\nRead https://example.org/guide before installing it on your computer.\n\n"
+                     "=== 4 ===\nAcross 14 firms, 1,200 people answered the survey over two whole years.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            src, work = self._export(tmp, text, ".txt")
+            with open(work, "w", encoding="utf-8") as fh:
+                fh.write(work_text)
+            conc = os.path.join(tmp, "c.txt")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("Microsoft Teams\n")
+            r, out = self._import(tmp, src, work, "--concepts", conc)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("1 (figures lost 5; added 6)", r.stdout)
+            self.assertIn("2 Microsoft Teams", r.stdout)
+            self.assertIn("3 (link or code changed)", r.stdout)
+            self.assertIn("Across 14 firms, 1,200 people answered", out)  # 4 passed
+            self.assertIn("Sales rose 5% in 2020", out)  # 1 kept as the original
+            with open(work, "a", encoding="utf-8") as fh:
+                fh.write("\n=== 9 ===\nNo such unit.\n")
+            r, _ = self._import(tmp, src, work)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("units the original does not: 9", r.stderr)
+
+    def test_a_dropped_latex_placeholder_keeps_the_original(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, work = self._export(tmp, read(PAPER), ".tex")
+            body = read(work).replace("model [5], where [6] captures", "model, where [6] captures")
+            with open(work, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            r, out = self._import(tmp, src, work)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("2 (LaTeX changed)", r.stdout)
+            self.assertIn("$y = \\alpha + \\beta x$", out)
+
+    def test_a_list_with_nothing_to_rewrite_keeps_its_lines(self):
+        md = "Intro text of this short document goes right here now.\n\n- Fast\n- Cheap and\n  simple\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            src, work = self._export(tmp, md, ".md")
+            r, out = self._import(tmp, src, work)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIn("- Cheap and\n  simple", out)
+
+    def test_join_only_touches_the_listed_paragraphs(self):
+        t = "One here. Two here.\n\nThree here. Four here.\n\nFive here. Six here.\n"
+        self.assertEqual(join.join_text(t, lang="en", only={2}),
+                         "One here. Two here.\n\nThree here and four here.\n\nFive here. Six here.\n")
 
 
 class ModelDir(unittest.TestCase):
@@ -508,7 +1386,7 @@ class Installer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             r = run(*INSTALL, "--dest", tmp)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            dest = os.path.join(tmp, "humanizar-es")
+            dest = os.path.join(tmp, "humanize-research")
             for f in ("SKILL.md", "scripts/rewrite.py", "scripts/join.py", "scripts/check.py",
                       "scripts/install_model.py", "scripts/unir.py", "examples/en/2-final.txt"):
                 self.assertTrue(os.path.isfile(os.path.join(dest, f)), f)
@@ -517,6 +1395,17 @@ class Installer(unittest.TestCase):
                 self.assertTrue(os.access(os.path.join(dest, "scripts", "install_model.sh"), os.X_OK))
             run(*INSTALL, "--destino", tmp, "--desinstalar")
             self.assertFalse(os.path.exists(dest))
+
+    def test_a_symlinked_install_can_be_replaced_by_a_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = os.path.join(tmp, "skills")
+            r = run(sys.executable, os.path.join(ROOT, "install.py"), "--dest", dest, "--symlink")
+            if "could not create the link" in r.stdout:
+                self.skipTest("no symlinks here")
+            r = run(sys.executable, os.path.join(ROOT, "install.py"), "--dest", dest)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertFalse(os.path.islink(os.path.join(dest, "humanize-research")))
+            self.assertTrue(os.path.isfile(os.path.join(dest, "humanize-research", "SKILL.md")))
 
     def test_removes_an_install_under_the_old_test_name(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -528,11 +1417,27 @@ class Installer(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertFalse(os.path.exists(old))
             self.assertIn("removed old version: " + old, r.stdout)
-            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanizar-es", "SKILL.md")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanize-research", "SKILL.md")))
             os.makedirs(old)  # uninstalling also cleans it up
             r = run(*INSTALL, "--dest", tmp, "--uninstall")
             self.assertFalse(os.path.exists(old))
-            self.assertFalse(os.path.exists(os.path.join(tmp, "humanizar-es")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "humanize-research")))
+
+    def test_an_install_under_the_old_name_is_replaced_but_not_a_git_clone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.path.join(tmp, "humanizar-es")
+            os.makedirs(os.path.join(old, "scripts"))
+            with open(os.path.join(old, "SKILL.md"), "w") as fh:
+                fh.write("---\nname: humanizar-es\n---\n")
+            r = run(*INSTALL, "--dest", tmp)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("removed old version: " + old, r.stdout)
+            self.assertFalse(os.path.exists(old))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanize-research", "SKILL.md")))
+            os.makedirs(os.path.join(old, ".git"))  # someone's clone under the old name
+            r = run(*INSTALL, "--dest", tmp)
+            self.assertIn("left as it is (a git clone): " + old, r.stdout)
+            self.assertTrue(os.path.isdir(os.path.join(old, ".git")))
 
     def test_by_default_installs_for_every_agent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -540,27 +1445,203 @@ class Installer(unittest.TestCase):
             r = run(*INSTALL, env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             for folder in (".claude/skills", ".agents/skills"):
-                self.assertTrue(os.path.isfile(os.path.join(tmp, folder, "humanizar-es", "SKILL.md")))
+                self.assertTrue(os.path.isfile(os.path.join(tmp, folder, "humanize-research", "SKILL.md")))
             run(*INSTALL, "--agent", "codex", env=env)
-            self.assertTrue(os.path.isfile(os.path.join(tmp, ".codex/skills/humanizar-es/SKILL.md")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, ".codex/skills/humanize-research/SKILL.md")))
             run(*INSTALL, "--agente", "dsh", env=env)
-            self.assertTrue(os.path.isfile(os.path.join(tmp, ".dsh/skills/humanizar-es/SKILL.md")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, ".dsh/skills/humanize-research/SKILL.md")))
             run(*INSTALL, "--uninstall", env=env)
-            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude/skills/humanizar-es")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude/skills/humanize-research")))
 
     @unittest.skipUnless(shutil.which("bash") and os.name == "posix", "macOS and Linux shortcut")
     def test_the_bash_shortcut_calls_the_installer(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = run("bash", os.path.join(ROOT, "install.sh"), "--dest", tmp)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanizar-es", "SKILL.md")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanize-research", "SKILL.md")))
 
     def test_frontmatter_follows_the_agent_skills_format(self):
         header = read(os.path.join(ROOT, "SKILL.md")).split("---")[1]
         name = re.search(r"^name: (.+)$", header, re.M).group(1).strip()
         description = re.search(r"^description: (.+)$", header, re.M).group(1).strip()
-        self.assertEqual(name, "humanizar-es")
+        self.assertEqual(name, "humanize-research")
         self.assertLessEqual(len(description), 1024)
+
+    def test_model_installer_counts_what_is_left_to_download(self):
+        import install_model
+        with tempfile.TemporaryDirectory() as tmp:
+            full = install_model.bytes_missing(tmp)
+            self.assertGreater(full, 4e9)
+            with open(os.path.join(tmp, rewrite.ADAPTER), "wb"):
+                pass
+            with open(os.path.join(tmp, rewrite.BASE + ".part"), "wb") as fh:
+                fh.write(b"x" * 1000)
+            self.assertEqual(install_model.bytes_missing(tmp), install_model.SIZES[rewrite.BASE] - 1000)
+
+    def test_model_installer_smoke_test_reports_a_broken_llama(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "broken_llama.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nsys.stderr.write('error: unknown argument: -dev\\n')\n"
+                         "sys.exit(1)\n")
+            code = ("import sys; sys.path.insert(0, %r); import install_model; "
+                    "sys.exit(install_model.smoke_test())" % SCRIPTS)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, "-c", code, env=env)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("unknown argument: -dev", r.stdout)
+
+    def test_model_download_resumes_when_the_server_closes_early(self):
+        """The server sends 2 of 3 MB and closes cleanly; the installer must resume with a
+        Range request, not take the file as finished, call it corrupted and delete it."""
+        import contextlib
+        import hashlib
+        import http.server
+        import io
+        import threading
+        import install_model
+        data = os.urandom(3 << 20)
+        seen = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                rng = self.headers.get("Range")
+                seen.append(rng)
+                start = int(rng.split("=")[1].rstrip("-")) if rng else 0
+                self.send_response(206 if rng else 200)
+                self.send_header("Content-Length", str(len(data) - start))
+                self.end_headers()
+                body = data[start:]
+                self.wfile.write(body if rng else body[:2 << 20])  # the first answer is cut
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        url = f"http://127.0.0.1:{server.server_port}/model.gguf"
+        with tempfile.TemporaryDirectory() as tmp:
+            old_dir, old_sleep = install_model.rewrite.MODEL_DIR, install_model.time.sleep
+            install_model.rewrite.MODEL_DIR = tmp
+            install_model.time.sleep = lambda s: None
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    install_model.download("model.gguf", url, hashlib.sha256(data).hexdigest())
+            finally:
+                install_model.rewrite.MODEL_DIR, install_model.time.sleep = old_dir, old_sleep
+            with open(os.path.join(tmp, "model.gguf"), "rb") as fh:
+                self.assertEqual(fh.read(), data)
+        self.assertEqual(seen, [None, f"bytes={2 << 20}-"])
+
+    @staticmethod
+    def _gguf(path, kvs):
+        """A GGUF header with these (key, type, value) pairs and no tensors."""
+        import struct
+
+        def string(t):
+            b = t.encode("utf-8")
+            return struct.pack("<Q", len(b)) + b
+        out = b"GGUF" + struct.pack("<IQQ", 3, 0, len(kvs))
+        for key, kind, value in kvs:
+            out += string(key) + struct.pack("<I", kind)
+            if kind == 8:
+                out += string(value)
+            elif kind == 4:
+                out += struct.pack("<I", value)
+            elif kind == 9:  # an array of strings, like the tokenizer's
+                out += struct.pack("<IQ", 8, len(value)) + b"".join(string(v) for v in value)
+        with open(path, "wb") as fh:
+            fh.write(out)
+
+    def test_a_base_model_of_your_own_is_checked_by_its_header(self):
+        import install_model
+        with tempfile.TemporaryDirectory() as tmp:
+            good, chat, other = (os.path.join(tmp, n) for n in ("b.gguf", "c.gguf", "o.gguf"))
+            self._gguf(good, [("general.architecture", 8, "qwen3"),
+                              ("tokenizer.ggml.tokens", 9, ["a", "b", "c"]),
+                              ("general.name", 8, "Qwen3 4B Base"), ("qwen3.embedding_length", 4, 2560)])
+            self._gguf(chat, [("general.architecture", 8, "qwen3"), ("general.name", 8, "Qwen3 4B"),
+                              ("qwen3.embedding_length", 4, 2560)])
+            self._gguf(other, [("general.architecture", 8, "llama"), ("general.name", 8, "Llama 3 8B"),
+                               ("llama.embedding_length", 4, 4096)])
+            self.assertEqual(install_model.gguf_info(good)["general.name"], "Qwen3 4B Base")
+            self.assertEqual(install_model.check_base(good), (None, None))
+            problem, warning = install_model.check_base(chat)
+            self.assertIsNone(problem)
+            self.assertIn("not a base model", warning)
+            self.assertIn("needs Qwen3-4B", install_model.check_base(other)[0])
+            with open(os.path.join(tmp, "junk.gguf"), "wb") as fh:
+                fh.write(b"not a model")
+            self.assertIn("could not be read", install_model.check_base(os.path.join(tmp, "junk.gguf"))[0])
+            env = dict(os.environ, HUMANIZE_BASE_MODEL=other, HUMANIZE_MODEL_DIR=tmp,
+                       HUMANIZE_LLAMA=sys.executable)
+            r = run(sys.executable, script("install_model.py"), "--no-test", env=env)
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("needs Qwen3-4B", r.stdout)
+            self.assertEqual(install_model.bytes_missing(tmp, own_base=True),
+                             install_model.SIZES[rewrite.ADAPTER])
+
+    def test_rewrite_uses_the_base_model_you_point_to(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            open(os.path.join(tmp, rewrite.ADAPTER), "w").close()  # no Qwen3-4B-Base.Q8_0.gguf here
+            own = os.path.join(tmp, "my-qwen3-4b-base-q4.gguf")
+            open(own, "w").close()
+            log = os.path.join(tmp, "m.txt")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nargs = sys.argv[1:]\n"
+                         f"open({log!r}, 'w').write(args[args.index('-m') + 1])\n"
+                         "sys.stdout.write(' bla bla bla bla bla bla bla bla.\\n</target_text>')\n")
+            src = os.path.join(tmp, "in.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Remote teams meet in person on fewer days than they did before now.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake, HUMANIZE_BASE_MODEL=own)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", os.path.join(tmp, "o.txt"),
+                    "--tries", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(read(log), own)
+
+    def test_a_file_that_does_not_match_is_set_aside_not_deleted(self):
+        import contextlib
+        import hashlib
+        import http.server
+        import io
+        import threading
+        import install_model
+        data = b"the real file" * 100
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *a):
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with tempfile.TemporaryDirectory() as tmp:
+            mine = os.path.join(tmp, "model.gguf")
+            with open(mine, "wb") as fh:
+                fh.write(b"someone's own model")
+            old = install_model.rewrite.MODEL_DIR
+            install_model.rewrite.MODEL_DIR = tmp
+            try:
+                with contextlib.redirect_stdout(io.StringIO()) as out:
+                    install_model.download("model.gguf", f"http://127.0.0.1:{server.server_port}/m",
+                                           hashlib.sha256(data).hexdigest())
+            finally:
+                install_model.rewrite.MODEL_DIR = old
+            self.assertEqual(read(mine + ".mismatch"), "someone's own model")
+            self.assertIn("HUMANIZE_BASE_MODEL", out.getvalue())
 
     def test_model_installer_has_hashes(self):
         s = read(script("install_model.py"))
