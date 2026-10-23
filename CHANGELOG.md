@@ -1,5 +1,43 @@
 # Changelog
 
+## 3.2.0 — October 23, 2026
+
+**English: tells of AI writing.** A new `scripts/tells.py` scores each paragraph against the
+catalog of Wikipedia's *Signs of AI writing*, as ranked by
+[blader/humanizer](https://github.com/blader/humanizer): chat residue, "not only… but",
+inflated significance («plays a crucial role»), stock words (delve, pivotal, furthermore…),
+filler, -ing riders, triads and dashes, plus a Spanish list («juega un papel crucial», «cabe
+destacar», «no solo… sino»). It names the paragraphs to regenerate and suggests a `--lead`;
+it never rewrites, since a hand fix brings the chat fingerprint back. On the English
+example the original scores 29 and the rewrite 17. **Not measured against detectors yet.**
+
+- `rewrite.py --candidates` prints each candidate's tells score and lists them fewest
+  first; `--max-tells N` retries a try above N and keeps the one with the fewest if all are
+  above. The end of a run lists the paragraphs with strong tells left.
+- `rewrite.py`, English: a paragraph that opens with "Moreover,", "Furthermore,",
+  "Additionally,"… leads the model with the words after it.
+- `join.py`, English: those filler openers are left out instead of becoming "and also";
+  "Nevertheless," and "Nonetheless," join as ", but"; more discourse markers to cut at;
+  acronyms (AI, COVID-19) and names like McDonald's keep their capitals; initials (John F.
+  Kennedy) and more abbreviations (Inc., Jr., et al.) no longer split a sentence;
+  `--no-dashes` turns dashes between words into commas. Spanish output is unchanged.
+- SKILL.md: leave out the chat wrapper when saving the original; scan for tells in step 6;
+  prefer the faithful candidate with the fewest tells in step 9.
+
+Fixes:
+
+- `rewrite.py` reports a failing llama.cpp (exit code and its last lines of stderr) and
+  stops; it used to retry with empty output and keep the original as "truncated".
+- The context grows with the paragraph instead of a fixed 4096 tokens, which a paragraph
+  of ~700+ words overflowed.
+- The invented-reference guard no longer takes words made of roman-numeral letters
+  («(civil)», "(I think)", "(mix)") for numerals.
+- `--lead` without `--only` is an error, like `--candidates`; `--only` rejects paragraph
+  numbers that don't exist; `--take` checks the paragraph count against the original.
+- `join.py --pauses`: a sentence that opens with "And" / «Y» no longer joins as "and and";
+  a joined question is lowercased after «¿» («y ¿vienes?»).
+- 65 tests (were 48).
+
 ## 3.1.1 — October 7, 2026
 
 **English, measured.** Two AI-generated English essays went from 100% to **0% in ZeroGPT**

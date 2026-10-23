@@ -86,13 +86,23 @@ palabras** como máximo. Lo que necesite más se regenera con el modelo (`--only
 escribe a mano ni se pega de vuelta del original: arreglos a mano de cuatro palabras o más
 dejaron la mitad de un ensayo en 3% en Grammarly; al regenerar esos párrafos bajó a 0%.
 
+El modelo base parafrasea lo que lee, así que las frases hechas de los modelos de chat
+pueden colarse: «juega un papel crucial», «no solo… sino también», "Furthermore,", una
+raya en cada oración. `tells.py` puntúa cada párrafo con el catálogo de
+[*Signs of AI writing*](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing) de
+Wikipedia, ordenado por fuerza en [blader/humanizer](https://github.com/blader/humanizer), y
+dice qué párrafos regenerar. Nunca los arregla: cada arreglo a mano devuelve la huella del
+chat. En el ejemplo en inglés, el original suma 29 y la reescritura 17.
+
 ### 3. Reconstruir el ritmo
 
 Las personas escriben a ráfagas, unas oraciones largas y otras cortas. `join.py --pausas 2`
 deja dos o tres puntos por párrafo, en **bloques de largo disparejo** de al menos dos
 oraciones, y corta primero donde una oración ya abre con un marcador del discurso («Sin
 embargo», «Por ejemplo», «Segundo»). Dentro de cada bloque une con «y», «;» o «, pero». No
-toca ninguna palabra de contenido.
+toca ninguna palabra de contenido. En inglés además quita los conectores de relleno
+"Moreover,", "Furthermore,", "Additionally,"…, respeta siglas (AI, COVID-19) e iniciales
+(John F. Kennedy) y, con `--no-dashes`, cambia por comas las rayas entre palabras.
 
 ### 4. Seleccionar midiendo
 
@@ -217,6 +227,7 @@ ese párrafo:
 
 ```bash
 python3 scripts/check.py mi-texto.txt reescrito.txt --concepts concepts.txt
+python3 scripts/tells.py mi-texto.txt reescrito.txt      # frases hechas de IA, por párrafo
 python3 scripts/rewrite.py mi-texto.txt -o reescrito.txt --concepts concepts.txt --only 6,11
 ```
 
@@ -239,7 +250,9 @@ python3 scripts/rewrite.py mi-texto.txt -o reescrito.txt --concepts concepts.txt
         --only 4 --candidates 6 --lead "Desde la" --temperature 1.1
 ```
 
-Une cada candidato en el texto completo, mide, adopta el que pasa y vuelve a unir:
+Cada candidato sale con su puntaje de `tells.py`, el más bajo primero; `--max-tells 2`
+además descarta los intentos que pasen ese puntaje. Une cada candidato en el texto
+completo, mide, adopta el que pasa y vuelve a unir:
 
 ```bash
 python3 scripts/rewrite.py mi-texto.txt -o reescrito.txt --take 4=reescrito.txt.candidates/p04-3.txt
@@ -258,7 +271,7 @@ Hay ejemplos completos, con cada arreglo a mano anotado, en [`examples/`](exampl
 | | Reescribe | Ritmo | Revisa | Medido |
 |---|---|---|---|---|
 | **Español** | ✅ | ✅ «y», «;», «pero»… | ✅ | ✅ cuatro ensayos, tres detectores |
-| **English** | ✅ (el adaptador HIP se entrenó en inglés) | ✅ "and", ";", "but"… | ✅ | ✅ ZeroGPT, dos ensayos · GPTZero: siguiente objetivo |
+| **English** | ✅ (el adaptador HIP se entrenó en inglés) | ✅ "and", ";", "but"…, sin conectores de relleno, `--no-dashes` | ✅ + `tells.py` | ✅ ZeroGPT, dos ensayos · GPTZero: siguiente objetivo |
 
 Otros idiomas: la reescritura puede funcionar (el modelo base es multilingüe), pero
 `join.py` solo conoce los conectores del español y del inglés. Agregar uno es un
@@ -296,7 +309,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 48 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 65 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -339,10 +352,11 @@ humanizar-es/
 │   ├── install_model.py     baja el modelo (una vez)
 │   ├── rewrite.py           etapas 1, 2 y 4: reescribe, cuida la fidelidad, candidatos
 │   ├── check.py             etapa 2: conceptos y negaciones, original contra reescritura
+│   ├── tells.py             etapas 2 y 4: frases hechas de IA por párrafo, qué regenerar
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   48 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   65 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,
@@ -362,5 +376,7 @@ python3 -m unittest discover -s tests -v
 
 Código y documentación: [MIT](LICENSE), © ervin-mo. El método y el adaptador HIP son de
 Xu et al. (2026); el modelo base es Qwen3-4B-Base, de Alibaba. Ambos son Apache-2.0 y se
-descargan por separado: ver [`THIRD_PARTY.md`](THIRD_PARTY.md). Si lo usas en tu trabajo,
+descargan por separado: ver [`THIRD_PARTY.md`](THIRD_PARTY.md). Los patrones de `tells.py`
+vienen de *Signs of AI writing* de Wikipedia y de
+[blader/humanizer](https://github.com/blader/humanizer) (MIT). Si lo usas en tu trabajo,
 cita el repo ([`CITATION.cff`](CITATION.cff)) y el artículo de HIP.

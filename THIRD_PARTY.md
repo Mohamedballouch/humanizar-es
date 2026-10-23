@@ -13,5 +13,12 @@ The HIP method and training code (MIT) belong to their authors:
 Paper: Xu et al., 2026, *Base Models Look Human To AI Detectors*,
 [arXiv:2605.19516](https://arxiv.org/abs/2605.19516).
 
+`scripts/tells.py` uses the catalog of AI-writing patterns in Wikipedia's
+[*Signs of AI writing*](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing)
+(WikiProject AI Cleanup) and its ranking by strength in
+[blader/humanizer](https://github.com/blader/humanizer) (MIT, © 2025 Siqi Chen). The phrase
+lists are short and rewritten as patterns; `tests/test_tools.py` quotes four of that
+project's before/after examples as fixtures, under its MIT license.
+
 `rewrite.py` runs the models with [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT),
 which you install yourself.

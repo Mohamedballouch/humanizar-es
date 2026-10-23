@@ -25,4 +25,16 @@ One fix. The model added a claim the original didn't make:
 Things left as they were because they say the same thing in other words: "COVID-19
 pandemic" for "global pandemic", "wellness" for "well-being", "sleeping" for "rest".
 
-`check.py` kept 13 of 13 concepts. `join.py` turned 24 sentences into 7.
+`check.py` kept 13 of 13 concepts. `join.py` turned 24 sentences into 7, and left out
+the "Moreover," that opened a sentence (since 3.2.0).
+
+## Tells of AI writing left
+
+```bash
+python3 scripts/tells.py examples/en/original.txt examples/en/1-rewritten.txt
+```
+
+The original scores 29 and the rewrite 17. What is left is mostly weak (lists of three,
+"studies show"), plus two paragraphs at 4: one opens with "Looking ahead," and the other
+with "Ultimately," and says "one-size-fits-all". Those two are the ones to regenerate as
+candidates, with the `--lead` that `tells.py` suggests.

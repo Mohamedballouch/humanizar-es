@@ -1,8 +1,8 @@
 ---
 name: humanizar-es
-description: Rewrites AI-generated text (Spanish or English) so AI detectors read it as human - 0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero on the same test essay - without changing what it says and without adding typos. Runs locally with no API or cost, in four measured stages - a base model without chat training rewrites (rewrite.py), fidelity is guarded (concepts, quotes, invented references, copying; check.py), the rhythm is rebuilt in blocks of uneven length (join.py --pauses 2), and paragraphs a detector still flags are regenerated as candidates and selected (rewrite.py --candidates, --lead, --take). Use when asked to "humanize" text, "make it not detectable as AI", "pass Grammarly", "remove AI tells", "make it not sound like ChatGPT", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA", "que no suene a ChatGPT".
+description: Rewrites AI-generated text (Spanish or English) so AI detectors read it as human - 0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero on the same test essay - without changing what it says and without adding typos. Runs locally with no API or cost, in four measured stages - a base model without chat training rewrites (rewrite.py), fidelity is guarded (concepts, quotes, invented references, copying; check.py), the rhythm is rebuilt in blocks of uneven length (join.py --pauses 2), and paragraphs a detector still flags, or that keep stock AI phrases (tells.py), are regenerated as candidates and selected (rewrite.py --candidates, --lead, --take). Use when asked to "humanize" text, "make it not detectable as AI", "pass Grammarly", "remove AI tells", "make it not sound like ChatGPT", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA", "que no suene a ChatGPT".
 metadata:
-  version: "3.1.1"
+  version: "3.2.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -36,6 +36,15 @@ Talk to the user in their language.
 6. **Stock openings come from the original.** The model starts each paragraph with the
    original's first two words; if they are «Uno de los problemas…» or «Aristóteles
    distingue…», it rebuilds the stock sentence. `--lead "Desde la"` gives it another start.
+   In English, a paragraph that opens with a filler ("Moreover,", "Additionally,") leads
+   with the words after it automatically.
+7. **Stock phrases come through from the original too.** The base model paraphrases what
+   it reads, so «plays a crucial role», "not only… but also", "Furthermore," or a dash in
+   every sentence can survive. `tells.py` finds them with the catalog of Wikipedia's
+   *Signs of AI writing* (as ranked by github.com/blader/humanizer) and names the
+   paragraphs to regenerate. It finds; it never fixes: fixing them yourself puts the
+   fingerprint back (rule 1). Not measured against detectors yet: it targets what readers
+   notice and it ranks candidates.
 
 In the commands, `<skill>` is the folder containing this `SKILL.md`. Texts go in the
 user's working folder, not inside the skill. **On Windows** type `python` (or `py`) where
@@ -46,7 +55,9 @@ it says `python3`; everything else is the same. No key or account is needed.
 ### 1. Save the original untouched
 
 If the text came through chat, write it to `00-original.txt`, with paragraphs separated by
-a blank line. Never overwrite the original.
+a blank line. Leave out a chat model's wrapper around the text («Certainly! Here is…», "I
+hope this helps", "Let me know if…"): it is not part of the text. Never overwrite the
+original.
 
 ### 2. Ask what it's for
 
@@ -102,6 +113,18 @@ original in every try. Rerun only those paragraphs, with more `--tries`.
 python3 <skill>/scripts/check.py 00-original.txt 01-rewritten.txt --concepts concepts.txt
 ```
 
+Then scan it for tells of AI writing:
+
+```bash
+python3 <skill>/scripts/tells.py 00-original.txt 01-rewritten.txt
+```
+
+It scores every paragraph (3 = strong tell, 2 = stock word, 1 = weak alone) and prints the
+`--only` command for those at 3 or more, with a `--lead` when the paragraph opens with a
+stock connector. Regenerate them as candidates (step 9) rather than fixing them: a tell
+is never one of your one-to-three-word fixes. In English, do this before delivering; in
+Spanish, when the user wants the text to read less like AI, not only to pass a detector.
+
 Then **compare every paragraph of `01-rewritten.txt` with the original** and list what
 really changed. Typical slips:
 
@@ -149,6 +172,13 @@ two sentences: when a near-copy of the original was left alone between two perio
 half went up to 6%. Without `--pauses`, every sentence of a paragraph is joined into one
 (also measured at 0%, but it reads badly); use it only if the user asks for it.
 
+**In English** `join.py` also leaves out the filler openers "Moreover,", "Furthermore,",
+"Additionally,", "In addition,", "Notably," and "Importantly," (they add nothing after
+"and"), keeps acronyms like AI or COVID-19 and initials like "John F. Kennedy" intact, and
+with `--no-dashes` turns dashes between words (—, –, --) into commas. Use `--no-dashes`
+when the user's own writing doesn't use dashes; ask if you don't know. None of this is
+measured against detectors yet; it removes what readers notice.
+
 **Don't touch `02-final.txt` afterwards** except for those connector swaps: any fix goes into `01-rewritten.txt` and you
 join again.
 
@@ -175,13 +205,15 @@ python3 <skill>/scripts/rewrite.py 00-original.txt -o 01-rewritten.txt --concept
 ```
 
 If the paragraph starts with a stock opening, add `--lead` with two other words that fit
-the paragraph («Desde la», «La potencia», «Para Aristóteles»). Candidates land in
-`01-rewritten.txt.candidates/`; tries that lose a concept, change a quote, invent a
-reference or copy the original are already discarded.
+the paragraph («Desde la», «La potencia», «Para Aristóteles»; `tells.py` suggests one after a
+stock connector). Candidates land in `01-rewritten.txt.candidates/`; tries that lose a
+concept, change a quote, invent a reference or copy the original are already discarded.
+Each candidate is printed with its tells score, and the list ends fewest tells first.
+`--max-tells 2` also discards tries above that score (it costs more tries).
 
 1. **Read each candidate against the original** and drop any that loses an idea, even if
    no concept is missing (one dropped a whole sentence about the contradiction between two
-   authors).
+   authors). Among the faithful ones, start with the fewest tells.
 2. **Have the user measure the survivors joined, inside the whole text**, not alone: a
    paragraph that scores 0% alone can be flagged in context, and the other way round.
 3. Adopt the one that passes and join again:
@@ -216,8 +248,11 @@ python3 <skill>/scripts/join.py 01-rewritten.txt -o 02-final.txt --concepts conc
    from ~250 words on. If the text is English and the user needs GPTZero, say so **before
    starting**. Never promise a number.
 2. **Detectors flag human text too** and change without notice. Hence the human control.
-3. **Only English and Spanish** have joining rules. Other languages: the rewrite may work,
-   joining won't.
+3. **Only English and Spanish** have joining rules and tells. Other languages: the rewrite
+   may work, joining and `tells.py` won't.
+4. **`tells.py` is a reader's check, not a detector.** A low score does not mean a detector
+   passes, and human text can score too (a dash, a list of three). Only strong tells
+   justify regenerating on one sighting.
 
 ## Responsible use
 
@@ -233,6 +268,7 @@ risk before proceeding.
   fidelity, `--only`, `--candidates`, `--lead`, `--take`
 - `scripts/join.py` — step 7: rebuild the rhythm of each paragraph
 - `scripts/check.py` — concepts and negations, original against version
+- `scripts/tells.py` — steps 6 and 9: tells of AI writing per paragraph, what to regenerate
 - `references/evidence.md` — every measurement
 - `references/detectors.md` — how to measure in Grammarly, GPTZero and ZeroGPT, with controls
 - `examples/` — worked examples in English and Spanish

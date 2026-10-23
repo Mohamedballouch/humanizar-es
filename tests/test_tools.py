@@ -28,6 +28,7 @@ sys.path.insert(0, SCRIPTS)
 import check  # noqa: E402
 import join  # noqa: E402
 import rewrite  # noqa: E402
+import tells  # noqa: E402
 
 
 def run(*args, **kw):
@@ -141,7 +142,7 @@ class Join(unittest.TestCase):
         self.assertEqual(join.detect_language(t), "en")
         self.assertEqual(join.join_text(t).strip(),
                          "Dr. Smith moved to Boston and the city was cold, but he stayed "
-                         "and I liked it and also the food was great, but winter came.")
+                         "and I liked it and the food was great, but winter came.")
 
     def test_pauses_leave_a_few_periods_and_keep_connectors(self):
         par = ("El ser es. El no-ser no es. Nada nace de la nada. Sin embargo, todo cambia. "
@@ -162,6 +163,69 @@ class Join(unittest.TestCase):
             out = join.join_text(par, pauses=1, seed=seed, lang="es")
             self.assertNotIn("y pero", out)
             self.assertTrue(", pero Heráclito" in out or ". Pero Heráclito" in out, out)
+
+    def test_english_keeps_acronyms_and_initials(self):
+        t = ("AI tools spread fast. COVID-19 changed work. They met John F. Kennedy there. "
+             "Then he left.\n")
+        self.assertEqual(join.join_text(t, lang="en").strip(),
+                         "AI tools spread fast and COVID-19 changed work and they met "
+                         "John F. Kennedy there and then he left.")
+        out = join.join_text(t, pauses=1, lang="en")
+        self.assertNotIn("aI", out)
+        self.assertNotIn("cOVID", out)
+        self.assertIn("John F. Kennedy", out)
+
+    def test_english_drops_filler_openers(self):
+        par = ("Remote work grew fast in 2020. Many firms kept it after the crisis. Moreover, "
+               "commuting time went down for most staff. Workers liked the change a lot. "
+               "Furthermore, offices emptied in big cities. Rents fell in many downtown areas.")
+        for pauses in (None, 1, 2):
+            out = join.join_text(par, pauses=pauses, lang="en")
+            self.assertNotIn("oreover", out)
+            self.assertNotIn("urthermore", out)
+            self.assertNotIn("and also", out)
+            self.assertIn("ommuting time went down", out)
+        self.assertIn("and iPhone sales", join.join_text("Prices fell. Moreover, iPhone sales grew.",
+                                                         lang="en"))
+        self.assertIn("modern art and museums", join.join_text("We saw modern art. Museums "
+                                                               "were full.", lang="en"))
+        # Spanish keeps «Además»: it is ordinary there and was measured that way
+        es = "El turismo crece. Además, la sierra atrae visitantes."
+        self.assertEqual(join.join_text(es, lang="es").strip(),
+                         "El turismo crece y además la sierra atrae visitantes.")
+
+    def test_pauses_join_and_without_a_double_connector(self):
+        par = ("The plan was simple and clear to all. It worked for a year or so. And then "
+               "the money ran out for good. Nobody saw it coming at all. The team moved on. "
+               "Most found new jobs.")
+        for seed in (7, 11, 23):
+            out = join.join_text(par, pauses=1, seed=seed, lang="en")
+            self.assertNotIn("and and", out.lower())
+            self.assertNotIn("; and then", out)
+
+    def test_no_dashes_turns_dashes_into_commas(self):
+        t = ("The new policy — announced without warning — affects thousands of workers. "
+             "The changes -- long overdue -- start in 1990–2000 terms.\n")
+        out = join.join_text(t, lang="en", no_dashes=True)
+        self.assertIn("The new policy, announced without warning, affects", out)
+        self.assertIn("the changes, long overdue, start in 1990–2000 terms", out)
+        dialogue = "—Hola —dijo ella—, ¿vienes?"
+        self.assertEqual(join.replace_dashes(dialogue), dialogue)  # dialogue is left alone
+        self.assertIn(" — ", join.join_text(t, lang="en"))  # off by default
+        self.assertEqual(join.replace_dashes("It is free—on every plan—."), "It is free, on every plan.")
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(t)
+            r = run(sys.executable, script("join.py"), src, "-o", out, "--no-dashes")
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertNotIn(" — ", read(out))
+
+    def test_a_joined_question_is_lowercased_after_the_mark(self):
+        self.assertEqual(join.join_text("Llegó tarde. ¿Vienes mañana?", lang="es").strip(),
+                         "Llegó tarde y ¿vienes mañana?")
+        self.assertIn("y ¿Juan viene", join.join_text("Llegó tarde. ¿Juan viene?",
+                                                      [("Juan", ["Juan"])], lang="es"))
 
     def test_detects_the_language(self):
         self.assertEqual(join.detect_language(read(ORIGINAL)), "es")
@@ -324,6 +388,109 @@ class Rewrite(unittest.TestCase):
                                                                 "(De Anima, libro i, cap. vi)")),
                          "(invented reference)")
 
+    def test_english_lead_skips_a_filler_opener(self):
+        self.assertEqual(rewrite.build_prompt("Moreover, the food was great today.", lang="en")[1],
+                         "The food")
+        self.assertEqual(rewrite.build_prompt("Moreover, the food was great.")[1], "Moreover, the")
+        self.assertEqual(rewrite.build_prompt("Además, el turismo crece.", lang="es")[1],
+                         "Además, el")
+
+    def test_context_grows_with_long_paragraphs(self):
+        self.assertEqual(rewrite.context_size("una dos tres", 109), 4096)
+        long = " ".join(["palabra"] * 1500)
+        n = 1500 * 3 + 100
+        self.assertGreaterEqual(rewrite.context_size(long, n), 2 * 1500 + n)
+        self.assertEqual(rewrite.context_size(long, n) % 1024, 0)
+
+    def test_words_made_of_roman_letters_are_not_references(self):
+        o = "La ley cambió el derecho en el siglo XX."
+        for r in ("La ley (civil) cambió el derecho en el siglo XX.",
+                  "The law (I think) changed it in the XX century.",
+                  "Una mezcla (mix) de leyes cambió el derecho en el siglo XX."):
+            self.assertIsNone(rewrite.citation_problem(o, r), r)
+        for r in ("La ley cambió el derecho (De Anima, libro i, cap. vi).",
+                  "La ley cambió el derecho (vol. XII).", "La ley cambió (2019)."):
+            self.assertEqual(rewrite.citation_problem(o, r), "(invented reference)", r)
+
+    def test_a_failing_llama_is_reported_not_taken_for_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "broken_llama.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nsys.stderr.write('error: invalid argument: -dev\\n')\n"
+                         "sys.exit(3)\n")
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("El turismo en la sierra crece cada año con más visitantes.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "2", env=env)
+            self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+            self.assertIn("exited with code 3", r.stderr)
+            self.assertIn("invalid argument: -dev", r.stderr)
+            self.assertNotIn("truncated", r.stdout)
+
+    def test_only_and_lead_are_checked_before_running(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = self._fake_llama(tmp)
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Uno dos tres cuatro.\n\nCinco seis siete ocho.\n")
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("Uno.\n\nDos.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            for only, message in (("5", "has 2 paragraphs"), ("a", "paragraph numbers")):
+                r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--only", only,
+                        env=env)
+                self.assertEqual(r.returncode, 2)
+                self.assertIn(message, r.stderr)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--lead", "Desde la",
+                    env=env)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("--lead needs --only", r.stderr)
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("Uno.\n")
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--take", "1=" + src,
+                    env=env)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("same count", r.stderr)
+
+    def test_max_tells_retries_and_keeps_the_try_with_fewest(self):
+        text = ("Remote work changed how many offices plan their weeks, and teams now meet in "
+                "person on fewer days while the rest of the work happens from home.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "tell_llama.py")
+            calls = os.path.join(tmp, "calls")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write(
+                    "import os, sys\n"
+                    f"c = {calls!r}\n"
+                    "n = int(open(c).read()) + 1 if os.path.exists(c) else 1\n"
+                    "open(c, 'w').write(str(n))\n"
+                    "outs = {1: ' work plays a crucial role in the pivotal plans of offices, and'\n"
+                    "           ' crews gather on fewer days while the rest gets done at home.',\n"
+                    "        2: ' work reshaped the weekly plans of offices and crucially crews'\n"
+                    "           ' gather on fewer days, while the rest gets done at home now.',\n"
+                    "        3: ' work altered how offices plan the week: crews gather on fewer'\n"
+                    "           ' days in person and the rest of the job gets done at home.'}\n"
+                    "sys.stdout.write(outs[min(n, 3)] + '\\n</target_text>')\n")
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "2",
+                    "--max-tells", "0", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("crucially", read(out))  # the second try: one tell, not three
+            self.assertIn("every try kept AI tells", r.stdout)
+            os.remove(calls)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "3",
+                    "--max-tells", "0", env=env)
+            self.assertIn("altered how offices", read(out))
+            self.assertIn("done, try 3", r.stdout)
+
     def _echo_llama(self, tmp):
         """A fake llama that writes back a different, faithful version each call."""
         for f in (rewrite.BASE, rewrite.ADAPTER):
@@ -366,6 +533,8 @@ class Rewrite(unittest.TestCase):
             self.assertTrue(first.startswith("Desde la "), first)
             self.assertIn("Desde_la", first)  # the lead reached the prompt
             self.assertEqual(read(out), "Primero, ya corregido.\n\nSegundo, ya corregido.\n")
+            self.assertIn("tells 0", r.stdout)
+            self.assertIn("fewest tells first", r.stdout)
             r = run(sys.executable, script("rewrite.py"), src, "-o", out,
                     "--take", "1=" + os.path.join(folder, files[1]), env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -432,6 +601,69 @@ class Rewrite(unittest.TestCase):
                     "-o", os.path.join(tmp, "x.txt"), env=env)
             self.assertEqual(r.returncode, 2)
             self.assertIn("ERROR", r.stderr)
+
+
+class Tells(unittest.TestCase):
+    # Before/after pairs from github.com/blader/humanizer (MIT, © 2025 Siqi Chen)
+    PAIRS = [
+        ("It's not just about the beat riding under the vocals; it's part of the aggression "
+         "and atmosphere. It's not merely a song, it's a statement.",
+         "The heavy beat adds to the aggressive tone."),
+        ("The real question is whether teams can adapt. At its core, what really matters is "
+         "organizational readiness.",
+         "The question is whether teams can adapt. That mostly depends on whether the "
+         "organization is ready to change its habits."),
+        ("Great question! Here is an overview of the French Revolution. It began in 1789 when a "
+         "financial crisis and food shortages led to widespread unrest. I hope this helps! Let "
+         "me know if you'd like me to expand on any section.",
+         "The French Revolution began in 1789 when a financial crisis and food shortages led to "
+         "widespread unrest."),
+        ("The Statistical Institute of Catalonia was officially established in 1989, marking a "
+         "pivotal moment in the evolution of regional statistics in Spain.",
+         "The Statistical Institute of Catalonia was established in 1989, part of a wider "
+         "decentralization of administrative functions in Spain."),
+    ]
+
+    def test_flags_ai_prose_and_not_its_human_rewrite(self):
+        for before, after in self.PAIRS:
+            self.assertGreaterEqual(tells.score(before, "en"), tells.STRONG, before)
+            self.assertEqual(tells.score(after, "en"), 0, (after, tells.find(after, "en")))
+
+    def test_quotations_are_not_the_author_s(self):
+        self.assertEqual(tells.score('She called it "a testament to the age" and left.', "en"), 0)
+        self.assertGreater(tells.score("She called it a testament to the age and left.", "en"), 0)
+
+    def test_spanish_tells_and_the_word_potencia(self):
+        self.assertGreaterEqual(tells.score("La ética juega un papel crucial en la vida.", "es"),
+                                tells.STRONG)
+        self.assertEqual(tells.score("La bellota tiene la potencia de ser encina.", "es"), 0)
+
+    def test_the_rewrite_of_the_english_example_has_fewer_tells(self):
+        total = lambda f: sum(s for _, s, _ in tells.report(tells.paragraphs_of(read(f)), "en"))  # noqa: E731
+        self.assertLess(total(REWRITTEN_EN), total(ORIGINAL_EN))
+
+    def test_suggests_a_lead_after_a_stock_connector(self):
+        self.assertEqual(tells.suggested_lead("Furthermore, companies that embrace it win."),
+                         "Companies that")
+        self.assertEqual(tells.suggested_lead("Looking ahead, the future of work changes."),
+                         "The future")
+        self.assertIsNone(tells.suggested_lead("One of the most important problems is time."))
+
+    def test_cli_names_the_paragraphs_to_regenerate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = os.path.join(tmp, "text.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("A title\n\nThe cat sat on the mat and it was happy all day.\n\n"
+                         "Furthermore, the dog plays a crucial role in the house as well.\n")
+            r = run(sys.executable, script("tells.py"), src)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("--only 3 --candidates 6", r.stdout)
+            self.assertIn('--lead "The dog"', r.stdout)
+            r = run(sys.executable, script("tells.py"), src, "--max", "2")
+            self.assertEqual(r.returncode, 1)
+            r = run(sys.executable, script("tells.py"), ORIGINAL_EN, REWRITTEN_EN)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("total", r.stdout)
 
 
 class ModelDir(unittest.TestCase):
