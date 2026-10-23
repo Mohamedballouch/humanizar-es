@@ -283,11 +283,12 @@ def join_with_pauses(paragraph, proper, pauses, rnd, doubtful=None, lang="es"):
 
 
 def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, lang=None,
-              pauses=None, no_dashes=False, fmt="text"):
+              pauses=None, no_dashes=False, fmt="text", only=None):
     """doubtful: if it is a list, it receives the words that were lowercased without
     appearing that way anywhere else in the text (possible proper nouns).
     lang: "es", "en" or None to detect it. no_dashes: dashes between words become commas.
-    fmt: "text" (plain text or Markdown) or "latex"."""
+    fmt: "text" (plain text or Markdown) or "latex". only: the paragraph numbers to join
+    (a set), leaving the rest as they are; None joins them all."""
     frame, paragraphs = blocks.parse(text, fmt)
     lang = lang or detect_language(" ".join(blocks.prose_of(x, fmt) for x in paragraphs))
     c = LANGUAGES[lang]
@@ -309,7 +310,10 @@ def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, la
         return x if joined == visible else (latex.restore(joined, pieces) or x)
 
     out = []
-    for x in paragraphs:
+    for n, x in enumerate(paragraphs, 1):
+        if only is not None and n not in only:
+            out.append(x)
+            continue
         k = blocks.kind(x, fmt)
         if k == "list":
             out.append(blocks.rebuild([(m, one(t) if t else t) for m, t in blocks.items(x, fmt)],
@@ -339,6 +343,8 @@ def main():
     ap.add_argument("--pauses", "--pausas", dest="pauses", type=int,
                     help="leave this many periods per paragraph (2 or 3) in blocks of uneven "
                     "length, instead of joining everything; reads better")
+    ap.add_argument("--only", help="join only these paragraphs (e.g. 4,7), the numbers rewrite.py "
+                    "--only uses; the rest stay as they are")
     ap.add_argument("--no-dashes", "--sin-rayas", dest="no_dashes", action="store_true",
                     help="turn dashes between words (—, – and --) into commas; for English text "
                     "whose author does not use them")
@@ -351,8 +357,14 @@ def main():
     fmt = blocks.format_of(args.input)
     lang = args.lang or detect_language(" ".join(blocks.prose_of(x, fmt)
                                                  for x in blocks.parse(text, fmt)[1]))
+    try:
+        only = {int(n) for n in args.only.split(",") if n.strip()} if args.only else None
+    except ValueError:
+        print(f"ERROR: --only takes paragraph numbers like 4,7; got {args.only}", file=sys.stderr)
+        return 2
     joined = join_text(text, concepts, args.ratio, max_words=args.max_words, doubtful=doubtful,
-                       lang=lang, pauses=args.pauses, no_dashes=args.no_dashes, fmt=fmt)
+                       lang=lang, pauses=args.pauses, no_dashes=args.no_dashes, fmt=fmt,
+                       only=only)
     with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(joined)
     count = lambda t: len(re.findall(r"[.!?](?:\s|$)", t))  # noqa: E731

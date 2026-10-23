@@ -178,7 +178,8 @@ def main():
     py = "python" if os.name == "nt" else "python3"
     print("\nDone. Open a new session of your agent and ask it, for example:")
     print("  «humanize this text without changing what it says»")
-    print("\nThe first time you also need the local model (~4.6 GB, only once):")
+    print("\nIt starts with the Claude pipeline, which needs nothing else. For the base-model\n"
+          "pipeline (measured, and fully local) you also need the model, once (~4.6 GB):")
     if os.name == "nt":
         print("  winget install llama.cpp")
     else:

@@ -1,5 +1,33 @@
 # Changelog
 
+## 4.1.0 — October 23, 2026
+
+**Two pipelines, the user chooses.** The skill's default is now the **Claude pipeline**:
+the agent rewrites the prose itself and the repo's guards check every paragraph. The
+**base-model pipeline** (the measured one) runs on request, and the skill offers it for the
+paragraphs a detector still flags.
+
+- `scripts/prose.py`: `export` writes the prose of a text or a paper, unit by unit
+  (paragraphs and list items; in LaTeX with placeholders for math, citations and commands),
+  to a work file the agent rewrites; `import` puts it back and refuses any unit that loses
+  or adds a figure, loses a concept, changes a quotation, invents a reference, changes a
+  link or code, breaks a LaTeX placeholder, comes out truncated or copies the original. A
+  refused unit stays as the original and the exit code is 1 until all pass. An unchanged
+  work file gives the paper back byte for byte.
+- `join.py --only`: joins only the listed paragraphs, so the base-model paragraphs of a
+  Claude-pipeline text get their rhythm and the rest is left alone.
+- SKILL.md: one part shared by both pipelines (the original, what it is for, the concepts),
+  then the Claude pipeline (C1–C6, with writing rules drawn from what the detectors were
+  measured to react to) and the base-model pipeline (B1–B6, unchanged).
+- **The Claude pipeline is not measured against detectors.** Rewrites by other chat models
+  scored 64–100% in Grammarly; the docs say so wherever the default is described.
+- Detectors guide: **Originality.ai** (models, free checker, cost, data kept) and
+  **Turnitin / iThenticate** (not measurable from here; humanizer detection in English
+  since August 2025).
+- README: the two pipelines side by side. The old line "your text never leaves your
+  machine" now says what is true: by hand, it does not; through an agent, the agent's
+  provider reads it.
+
 ## 4.0.0 — October 23, 2026
 
 **New name: humanize-research.** The skill now rewrites research papers (LaTeX and PDF) as

@@ -13,14 +13,27 @@
 takes a text written with ChatGPT, Claude, Gemini or DeepSeek and gives
 it back **saying the same thing**, in prose that the three detectors we measured read as
 human: **0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero**, on the same
-1,990-word essay that started at 45%. It runs on your own computer with an open model: no
-API, no keys, no per-word fees, and your text never leaves your machine. Use it by hand or
-as a *skill* for your coding agent (Claude Code, Codex, OpenCode, Antigravity).
+1,990-word essay that started at 45%. Use it as a *skill* for your coding agent (Claude
+Code, Codex, OpenCode, Antigravity), or by hand.
 
-It is not a synonym spinner, a "rewrite it in a human tone" prompt, or a typo generator.
-It is a four-stage pipeline, and every stage exists because a controlled experiment showed
-what a detector actually measures: one variable at a time, the same text in every
-condition, and a human-written control and the AI original in every session.
+## Two pipelines
+
+| | **Claude pipeline** (the skill's default) | **Base-model pipeline** |
+|---|---|---|
+| Who writes | Your agent, paragraph by paragraph | A local base model without chat training (Qwen3-4B-Base + HIP) |
+| What guards it | `prose.py import`: every figure, concept, quotation, reference, link and LaTeX placeholder, or the paragraph is refused | The same checks, inside `rewrite.py` |
+| Needs | Nothing to install | A one-time 4.6 GB download; 30 s to 3 min per paragraph on CPU |
+| Measured | **Not yet.** Rewrites by other chat models scored 64–100% in Grammarly | The results below |
+| Your text | Read by your agent's provider, like anything your agent reads | Rewritten on your computer; by hand, it never leaves it |
+
+The skill runs the Claude pipeline unless you ask for the base model, and offers the base
+model for the paragraphs a detector still flags. Run by hand, without an agent, it is the
+base-model pipeline. Every number below is the base-model pipeline's.
+
+It is not a synonym spinner or a typo generator. The base-model pipeline has four stages,
+and every one exists because a controlled experiment showed what a detector actually
+measures: one variable at a time, the same text in every condition, and a human-written
+control and the AI original in every session.
 
 ---
 
@@ -42,7 +55,7 @@ halves. The Dragon Ball essay ran on an earlier version of the pipeline.*
 
 ---
 
-## The method
+## The method (base-model pipeline)
 
 ```
  original ─► 1. rewrite ──► 2. fidelity ──► 3. rhythm ──► 4. selection ──► final
@@ -197,6 +210,8 @@ rhythm, and select candidates for whatever your detector still flags.
 
 ### The model (once, ~4.6 GB)
 
+Only for the base-model pipeline: the Claude pipeline needs nothing installed.
+
 You need Python 3.9+ (no extra packages) and [llama.cpp](https://github.com/ggml-org/llama.cpp):
 
 | | macOS and Linux | Windows |
@@ -212,7 +227,8 @@ seconds per paragraph; on a few-years-old PC, 1 to 3 minutes.
 
 ## Use it by hand
 
-On Windows, type `python` where it says `python3`.
+By hand, without an agent, you run the base-model pipeline. On Windows, type `python`
+where it says `python3`.
 
 **1. List what must not be lost** in `concepts.txt`: full proper names, figures, terms.
 One per line, variants with `|`, `*` for prefixes.
@@ -325,6 +341,8 @@ only knows Spanish and English connectors. Adding one is a small dictionary in
 | **Grammarly** | ✅ 0% on three of four essays (10% on one run with an older version) |
 | **GPTZero** | ✅ 0% AI · 98% human (Spanish) · English: next milestone ([what we tried](references/evidence.md)) |
 | **ZeroGPT** | ✅ 0% in Spanish and English, with stage 4 (selection) where needed |
+| **Originality.ai** | not measured yet; it claims to catch humanizers, so treat it as the strictest ([how to measure](references/detectors.md)) |
+| **Turnitin / iThenticate** | cannot be measured: sold only to institutions and publishers, and it has counted English "humanizer" text as AI since August 2025 |
 | QuillBot | not usable in Spanish: it scored the AI original 100% human |
 
 Each detector runs its own model, so a version that passes one may not pass another; the
@@ -349,7 +367,7 @@ No. It changes who wrote the sentences and their rhythm, not the spelling.
 Three of four essays reached 0% in Grammarly, and the latest one passes Grammarly, GPTZero
 and ZeroGPT at once. The pieces that can be deterministic are (the joining is seeded;
 ZeroGPT gives the same score for the same text), output that copies the original is
-refused, and 111 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
+refused, and 117 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
 over time, which is why every session carries controls.
 
 **Does the selection step send my text anywhere?**
@@ -391,6 +409,7 @@ humanizar-es/
 ├── install.py               installs the skill (install.sh: shortcut for macOS/Linux)
 ├── scripts/
 │   ├── install_model.py     downloads the model (once)
+│   ├── prose.py             Claude pipeline: the prose out to a work file and back, guarded
 │   ├── rewrite.py           stages 1, 2 and 4: rewrite, guard fidelity, candidates
 │   ├── check.py             stage 2: concepts and negations, original vs rewrite
 │   ├── tells.py             stages 2 and 4: stock AI phrases per paragraph, what to regenerate
@@ -400,7 +419,7 @@ humanizar-es/
 │   └── join.py              stage 3: rebuild the rhythm of each paragraph
 ├── examples/                worked examples in Spanish and English
 ├── references/              every measurement, and how to measure
-└── tests/                   111 tests on Ubuntu, macOS and Windows (no network, no model)
+└── tests/                   117 tests on Ubuntu, macOS and Windows (no network, no model)
 ```
 
 The old script names (`hip.py`, `unir.py`, `verificar_fidelidad.py`, `instalar_hip.py`)

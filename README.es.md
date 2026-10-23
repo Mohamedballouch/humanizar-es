@@ -13,15 +13,27 @@
 nombre) recibe un texto escrito con ChatGPT, Claude, Gemini o DeepSeek y lo
 devuelve **diciendo lo mismo**, en una prosa que los tres detectores que medimos leen como
 humana: **0% en Grammarly, 0% en ZeroGPT y 0% IA / 98% humano en GPTZero**, con el mismo
-ensayo de 1,990 palabras que empezó en 45%. Corre en tu computadora con un modelo abierto:
-sin API, sin claves, sin cobro por palabra, y tu texto nunca sale de tu máquina. Úsalo a
-mano o como *skill* de tu agente (Claude Code, Codex, OpenCode, Antigravity).
+ensayo de 1,990 palabras que empezó en 45%. Úsalo como *skill* de tu agente (Claude Code,
+Codex, OpenCode, Antigravity), o a mano.
 
-No es un cambiador de sinónimos, ni un prompt de «reescríbelo con tono humano», ni un
-generador de faltas de ortografía. Es un proceso de cuatro etapas, y cada etapa existe
-porque un experimento controlado mostró qué mide de verdad un detector: una variable a la
-vez, el mismo texto en cada condición, y un texto humano de control y el original de IA en
-cada sesión.
+## Dos procesos
+
+| | **Proceso Claude** (el de la skill por defecto) | **Proceso con modelo base** |
+|---|---|---|
+| Quién escribe | Tu agente, párrafo por párrafo | Un modelo base local sin entrenamiento de chat (Qwen3-4B-Base + HIP) |
+| Qué lo vigila | `prose.py import`: cada cifra, concepto, cita, referencia, enlace y marcador de LaTeX, o el párrafo se rechaza | Las mismas comprobaciones, dentro de `rewrite.py` |
+| Necesita | Nada que instalar | Una descarga única de 4.6 GB; de 30 s a 3 min por párrafo en CPU |
+| Medido | **Todavía no.** Las reescrituras de otros modelos de chat dieron 64–100% en Grammarly | Los resultados de abajo |
+| Tu texto | Lo lee el proveedor de tu agente, como todo lo que lee tu agente | Se reescribe en tu computadora; a mano, nunca sale de ella |
+
+La skill usa el proceso Claude salvo que pidas el modelo base, y ofrece el modelo base para
+los párrafos que un detector todavía marque. A mano, sin agente, es el proceso con modelo
+base. Todas las cifras de abajo son del proceso con modelo base.
+
+No es un cambiador de sinónimos ni un generador de faltas de ortografía. El proceso con
+modelo base tiene cuatro etapas, y cada una existe porque un experimento controlado mostró
+qué mide de verdad un detector: una variable a la vez, el mismo texto en cada condición, y
+un texto humano de control y el original de IA en cada sesión.
 
 ---
 
@@ -43,7 +55,7 @@ midió en mitades. El ensayo de Dragon Ball se corrió con una versión anterior
 
 ---
 
-## El método
+## El método (proceso con modelo base)
 
 ```
  original ─► 1. reescribe ─► 2. fidelidad ─► 3. ritmo ──► 4. selección ──► final
@@ -198,6 +210,8 @@ seleccionar candidatos de lo que tu detector todavía marque.
 
 ### El modelo (una vez, ~4.6 GB)
 
+Solo para el proceso con modelo base: el proceso Claude no necesita instalar nada.
+
 Necesitas Python 3.9+ (sin paquetes extra) y [llama.cpp](https://github.com/ggml-org/llama.cpp):
 
 | | macOS y Linux | Windows |
@@ -213,7 +227,8 @@ por párrafo; en una PC de hace unos años, de 1 a 3 minutos.
 
 ## Úsalo a mano
 
-En Windows escribe `python` donde dice `python3`.
+A mano, sin agente, usas el proceso con modelo base. En Windows escribe `python` donde dice
+`python3`.
 
 **1. Anota lo que no se puede perder** en `concepts.txt`: nombres propios completos,
 cifras, términos. Uno por línea, variantes con `|`, `*` para prefijos.
@@ -326,6 +341,8 @@ diccionario pequeño en `scripts/join.py`; se aceptan pull requests.
 | **Grammarly** | ✅ 0% en tres de cuatro ensayos (10% en una corrida con una versión anterior) |
 | **GPTZero** | ✅ 0% IA · 98% humano (español) · Inglés: siguiente objetivo ([lo que probamos](references/evidence.md)) |
 | **ZeroGPT** | ✅ 0% en español y en inglés, con la etapa 4 (selección) cuando hace falta |
+| **Originality.ai** | sin medir todavía; dice detectar humanizadores, así que tómalo como el más estricto ([cómo medir](references/detectors.md)) |
+| **Turnitin / iThenticate** | no se puede medir: solo lo venden a instituciones y editoriales, y desde agosto de 2025 cuenta como IA el texto en inglés de «humanizadores» |
 | QuillBot | no sirve en español: dio 100% humano al original de IA |
 
 Cada detector usa su propio modelo: una versión que pasa uno puede no pasar otro; el primer
@@ -351,7 +368,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 111 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 117 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -394,6 +411,7 @@ humanizar-es/
 ├── install.py               instala la skill (install.sh: atajo para macOS/Linux)
 ├── scripts/
 │   ├── install_model.py     baja el modelo (una vez)
+│   ├── prose.py             proceso Claude: la prosa a un archivo de trabajo y de vuelta, vigilada
 │   ├── rewrite.py           etapas 1, 2 y 4: reescribe, cuida la fidelidad, candidatos
 │   ├── check.py             etapa 2: conceptos y negaciones, original contra reescritura
 │   ├── tells.py             etapas 2 y 4: frases hechas de IA por párrafo, qué regenerar
@@ -403,7 +421,7 @@ humanizar-es/
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   111 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   117 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,
