@@ -66,7 +66,7 @@ def download(name, url, sha, tries=3):
     expected = 0  # the full size, as the server last reported it
     for attempt in range(1, tries + 1):
         have = os.path.getsize(partial) if os.path.isfile(partial) else 0
-        req = urllib.request.Request(url, headers={"User-Agent": "humanizar-es"})
+        req = urllib.request.Request(url, headers={"User-Agent": "humanize-research"})
         if have:
             req.add_header("Range", f"bytes={have}-")
         try:

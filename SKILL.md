@@ -1,8 +1,8 @@
 ---
-name: humanizar-es
-description: Rewrites AI-generated text (Spanish or English) so AI detectors read it as human - 0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero on the same test essay - without changing what it says and without adding typos. Runs locally with no API or cost, in four measured stages - a base model without chat training rewrites (rewrite.py), fidelity is guarded (concepts, quotes, invented references, copying; check.py), the rhythm is rebuilt in blocks of uneven length (join.py --pauses 2), and paragraphs a detector still flags, or that keep stock AI phrases (tells.py), are regenerated as candidates and selected (rewrite.py --candidates, --lead, --take). Takes text, Markdown, LaTeX papers (math and citations kept) and PDF (convert.py); every figure is checked. Use when asked to "humanize" text, "make it not detectable as AI", "pass Grammarly", "remove AI tells", "make it not sound like ChatGPT", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA", "que no suene a ChatGPT".
+name: humanize-research
+description: Rewrites AI-generated text and research papers (Spanish or English) so AI detectors read it as human - 0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero on the same test essay - without changing what it says or adding typos. Runs locally with no API or cost, in four measured stages - a base model without chat training rewrites (rewrite.py), fidelity is guarded (concepts, quotes, invented references, copying; check.py), the rhythm is rebuilt in blocks of uneven length (join.py --pauses 2), and paragraphs a detector still flags, or that keep stock AI phrases (tells.py), are regenerated as candidates and selected (rewrite.py --candidates, --lead, --take). Takes text, Markdown, LaTeX papers (math and citations kept) and PDF (convert.py); every figure is checked. Use when asked to "humanize" text, "make it not detectable as AI", "pass Grammarly", "remove AI tells", "make it not sound like ChatGPT", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA", "que no suene a ChatGPT".
 metadata:
-  version: "3.4.0"
+  version: "4.0.0"
   languages: en, es
   evidence: references/evidence.md
 ---

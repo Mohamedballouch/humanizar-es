@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Installs the humanizar-es skill for your coding agents.
+"""Installs the humanize-research skill for your coding agents.
 Works the same on macOS, Linux and Windows (no extra packages).
 
 By default it installs into the two folders that cover everyone:
   ~/.claude/skills   Claude Code (and OpenCode, which reads it too)
   ~/.agents/skills   Codex, OpenCode, Antigravity (agy) and DeepSeek Harness (dsh)
 
-An old humanizar-es install found in the same folders is removed.
+An install under an old name found in the same folders is removed: humanizar-es (the
+name until 3.4) and humanize-local. A git clone under an old name is left alone.
 
 usage:
   python3 install.py                       # the two folders above
   python3 install.py --agent codex         # a single agent: claude, codex, opencode,
                                            #   antigravity, dsh, gemini or agents
-  python3 install.py --dest PATH           # another skills folder (creates PATH/humanizar-es)
+  python3 install.py --dest PATH           # another skills folder (creates PATH/humanize-research)
   python3 install.py --symlink             # link instead of copy (edit here, it shows there)
   python3 install.py --uninstall           # remove it from the same destinations
 
@@ -30,8 +31,9 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(errors="replace")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-NAME = "humanizar-es"
-LEGACY_NAMES = ("humanize-local",)  # a 3.0 test build that never shipped
+NAME = "humanize-research"
+LEGACY_NAMES = ("humanizar-es",    # the name until 3.4
+                "humanize-local")  # a 3.0 test build that never shipped
 COPY = ("SKILL.md", "README.md", "README.es.md", "LICENSE", "THIRD_PARTY.md", "references",
         "scripts", "examples")
 
@@ -67,18 +69,22 @@ def remove(path):
 
 def remove_legacy(base):
     """Removes an install under an old name (folder or symlink) from this skills folder,
-    unless it is this very repository."""
+    unless it is this very repository or a git clone someone keeps there."""
     for legacy in LEGACY_NAMES:
         old = os.path.join(base, legacy)
-        if os.path.lexists(old) and (os.path.islink(old)
-                                     or os.path.realpath(old) != os.path.realpath(HERE)):
-            remove(old)
-            print(f"removed old version: {old}")
+        if not os.path.lexists(old):
+            continue
+        if not os.path.islink(old) and (os.path.realpath(old) == os.path.realpath(HERE)
+                                        or os.path.isdir(os.path.join(old, ".git"))):
+            print(f"left as it is (a git clone): {old}")
+            continue
+        remove(old)
+        print(f"removed old version: {old}")
 
 
 def install_into(base, mode):
     base = os.path.abspath(os.path.expanduser(base))
-    if os.path.basename(base) in (NAME,) + LEGACY_NAMES:  # do not nest .../humanizar-es/humanizar-es
+    if os.path.basename(base) in (NAME,) + LEGACY_NAMES:  # do not nest .../humanize-research/humanize-research
         base = os.path.dirname(base)
     dest = os.path.join(base, NAME)
 
@@ -129,7 +135,7 @@ def install_into(base, mode):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Installs the humanizar-es skill.",
+    ap = argparse.ArgumentParser(description="Installs the humanize-research skill.",
                                  formatter_class=argparse.RawDescriptionHelpFormatter,
                                  epilog=__doc__.split("usage:")[1])
     ap.add_argument("--agent", "--agente", dest="agent",

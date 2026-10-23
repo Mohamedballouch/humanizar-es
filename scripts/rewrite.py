@@ -72,7 +72,8 @@ def _has_model(directory):
 
 def resolve_model_dir(environ=None, home=None):
     """Where the model lives: $HUMANIZE_MODEL_DIR (or the old $HUMANIZAR_HIP_DIR), else
-    ~/.cache/humanizar-es/hip, the folder every version has used, so nobody downloads
+    ~/.cache/humanizar-es/hip, the folder every version has used (the skill's name until
+    3.4), so nobody downloads
     4.6 GB again."""
     environ = os.environ if environ is None else environ
     custom = environ.get("HUMANIZE_MODEL_DIR") or environ.get("HUMANIZAR_HIP_DIR")

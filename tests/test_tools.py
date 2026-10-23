@@ -1292,7 +1292,7 @@ class Installer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             r = run(*INSTALL, "--dest", tmp)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            dest = os.path.join(tmp, "humanizar-es")
+            dest = os.path.join(tmp, "humanize-research")
             for f in ("SKILL.md", "scripts/rewrite.py", "scripts/join.py", "scripts/check.py",
                       "scripts/install_model.py", "scripts/unir.py", "examples/en/2-final.txt"):
                 self.assertTrue(os.path.isfile(os.path.join(dest, f)), f)
@@ -1310,8 +1310,8 @@ class Installer(unittest.TestCase):
                 self.skipTest("no symlinks here")
             r = run(sys.executable, os.path.join(ROOT, "install.py"), "--dest", dest)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertFalse(os.path.islink(os.path.join(dest, "humanizar-es")))
-            self.assertTrue(os.path.isfile(os.path.join(dest, "humanizar-es", "SKILL.md")))
+            self.assertFalse(os.path.islink(os.path.join(dest, "humanize-research")))
+            self.assertTrue(os.path.isfile(os.path.join(dest, "humanize-research", "SKILL.md")))
 
     def test_removes_an_install_under_the_old_test_name(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1323,11 +1323,27 @@ class Installer(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertFalse(os.path.exists(old))
             self.assertIn("removed old version: " + old, r.stdout)
-            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanizar-es", "SKILL.md")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanize-research", "SKILL.md")))
             os.makedirs(old)  # uninstalling also cleans it up
             r = run(*INSTALL, "--dest", tmp, "--uninstall")
             self.assertFalse(os.path.exists(old))
-            self.assertFalse(os.path.exists(os.path.join(tmp, "humanizar-es")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "humanize-research")))
+
+    def test_an_install_under_the_old_name_is_replaced_but_not_a_git_clone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            old = os.path.join(tmp, "humanizar-es")
+            os.makedirs(os.path.join(old, "scripts"))
+            with open(os.path.join(old, "SKILL.md"), "w") as fh:
+                fh.write("---\nname: humanizar-es\n---\n")
+            r = run(*INSTALL, "--dest", tmp)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("removed old version: " + old, r.stdout)
+            self.assertFalse(os.path.exists(old))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanize-research", "SKILL.md")))
+            os.makedirs(os.path.join(old, ".git"))  # someone's clone under the old name
+            r = run(*INSTALL, "--dest", tmp)
+            self.assertIn("left as it is (a git clone): " + old, r.stdout)
+            self.assertTrue(os.path.isdir(os.path.join(old, ".git")))
 
     def test_by_default_installs_for_every_agent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1335,26 +1351,26 @@ class Installer(unittest.TestCase):
             r = run(*INSTALL, env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             for folder in (".claude/skills", ".agents/skills"):
-                self.assertTrue(os.path.isfile(os.path.join(tmp, folder, "humanizar-es", "SKILL.md")))
+                self.assertTrue(os.path.isfile(os.path.join(tmp, folder, "humanize-research", "SKILL.md")))
             run(*INSTALL, "--agent", "codex", env=env)
-            self.assertTrue(os.path.isfile(os.path.join(tmp, ".codex/skills/humanizar-es/SKILL.md")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, ".codex/skills/humanize-research/SKILL.md")))
             run(*INSTALL, "--agente", "dsh", env=env)
-            self.assertTrue(os.path.isfile(os.path.join(tmp, ".dsh/skills/humanizar-es/SKILL.md")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, ".dsh/skills/humanize-research/SKILL.md")))
             run(*INSTALL, "--uninstall", env=env)
-            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude/skills/humanizar-es")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, ".claude/skills/humanize-research")))
 
     @unittest.skipUnless(shutil.which("bash") and os.name == "posix", "macOS and Linux shortcut")
     def test_the_bash_shortcut_calls_the_installer(self):
         with tempfile.TemporaryDirectory() as tmp:
             r = run("bash", os.path.join(ROOT, "install.sh"), "--dest", tmp)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanizar-es", "SKILL.md")))
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "humanize-research", "SKILL.md")))
 
     def test_frontmatter_follows_the_agent_skills_format(self):
         header = read(os.path.join(ROOT, "SKILL.md")).split("---")[1]
         name = re.search(r"^name: (.+)$", header, re.M).group(1).strip()
         description = re.search(r"^description: (.+)$", header, re.M).group(1).strip()
-        self.assertEqual(name, "humanizar-es")
+        self.assertEqual(name, "humanize-research")
         self.assertLessEqual(len(description), 1024)
 
     def test_model_installer_counts_what_is_left_to_download(self):

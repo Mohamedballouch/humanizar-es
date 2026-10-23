@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.0.0 — October 23, 2026
+
+**New name: humanize-research.** The skill now rewrites research papers (LaTeX and PDF) as
+well as prose, in English and Spanish, and «humanizar-es» said neither. Agents find it as
+`humanize-research`, and `install.py` installs it under that name.
+
+- `install.py` removes an install under the old name (`humanizar-es`, and `humanize-local`)
+  from the same skills folders, but leaves a git clone kept there under the old name.
+- Unchanged, so nothing breaks or downloads again: the model folder
+  (`~/.cache/humanizar-es/hip`), the environment variables, every script and flag, and the
+  repository's own name and URLs.
+
 ## 3.4.0 — October 23, 2026
 
 **Papers: LaTeX in and out, PDF in and out, and figures that cannot change.**

@@ -1,4 +1,4 @@
-# humanizar-es · Humanizador de texto IA, local y gratis, para español e inglés
+# humanize-research · Humanizador de texto IA, local y gratis, para artículos y prosa en español e inglés
 
 [![pruebas](https://github.com/ervin-mo/humanizar-es/actions/workflows/tests.yml/badge.svg)](https://github.com/ervin-mo/humanizar-es/actions/workflows/tests.yml)
 [![licencia: MIT](https://img.shields.io/badge/licencia-MIT-blue.svg)](LICENSE)
@@ -7,9 +7,10 @@
 
 [English](README.md) · **Español**
 
-![humanizar-es: humaniza texto de IA en tu computadora y gratis](assets/vista-previa.png)
+![humanize-research: humaniza texto de IA en tu computadora y gratis](assets/vista-previa.png)
 
-**humanizar-es** recibe un texto escrito con ChatGPT, Claude, Gemini o DeepSeek y lo
+**humanize-research** (se llamaba *humanizar-es* hasta la 3.4; el repositorio conserva ese
+nombre) recibe un texto escrito con ChatGPT, Claude, Gemini o DeepSeek y lo
 devuelve **diciendo lo mismo**, en una prosa que los tres detectores que medimos leen como
 humana: **0% en Grammarly, 0% en ZeroGPT y 0% IA / 98% humano en GPTZero**, con el mismo
 ensayo de 1,990 palabras que empezó en 45%. Corre en tu computadora con un modelo abierto:
@@ -177,7 +178,7 @@ selección, sí. Todas las mediciones: [`references/evidence.md`](references/evi
 
 ```bash
 git clone https://github.com/ervin-mo/humanizar-es.git
-cd humanizar-es
+cd humanizar-es             # el nombre del repositorio; la skill se instala como humanize-research
 python3 install.py          # en Windows: python install.py
 ```
 
@@ -350,7 +351,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 110 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 111 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -402,7 +403,7 @@ humanizar-es/
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   110 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   111 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,

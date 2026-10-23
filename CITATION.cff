@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
-title: "humanizar-es: local AI text humanizer for Spanish and English"
+title: "humanize-research: local AI text humanizer for research papers and prose, in English and Spanish"
 abstract: >-
   Four-stage pipeline that rewrites AI-generated text (Spanish or English) with a local base
   model without chat training (Qwen3-4B-Base + HIP adapter), guards fidelity (concepts,
@@ -12,10 +12,12 @@ authors:
   - alias: ervin-mo
 repository-code: "https://github.com/ervin-mo/humanizar-es"
 license: MIT
-version: 3.4.0
+version: 4.0.0
 date-released: 2026-10-23
 keywords:
   - AI humanizer
+  - research papers
+  - LaTeX
   - humanize AI text
   - humanizador de texto IA
   - AI detector

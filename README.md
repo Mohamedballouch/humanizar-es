@@ -1,4 +1,4 @@
-# humanizar-es · Local AI text humanizer for Spanish and English
+# humanize-research · Local AI text humanizer for research papers and prose, in English and Spanish
 
 [![tests](https://github.com/ervin-mo/humanizar-es/actions/workflows/tests.yml/badge.svg)](https://github.com/ervin-mo/humanizar-es/actions/workflows/tests.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -7,9 +7,10 @@
 
 **English** · [Español](README.es.md)
 
-![humanizar-es: make AI text read as human, on your own computer, for free](assets/vista-previa.png)
+![humanize-research: make AI text read as human, on your own computer, for free](assets/vista-previa.png)
 
-**humanizar-es** takes a text written with ChatGPT, Claude, Gemini or DeepSeek and gives
+**humanize-research** (called *humanizar-es* until 3.4; the repository keeps that name)
+takes a text written with ChatGPT, Claude, Gemini or DeepSeek and gives
 it back **saying the same thing**, in prose that the three detectors we measured read as
 human: **0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero**, on the same
 1,990-word essay that started at 45%. It runs on your own computer with an open model: no
@@ -176,7 +177,7 @@ Every measurement: [`references/evidence.md`](references/evidence.md).
 
 ```bash
 git clone https://github.com/ervin-mo/humanizar-es.git
-cd humanizar-es
+cd humanizar-es             # the repository's name; the skill installs as humanize-research
 python3 install.py          # on Windows: python install.py
 ```
 
@@ -348,7 +349,7 @@ No. It changes who wrote the sentences and their rhythm, not the spelling.
 Three of four essays reached 0% in Grammarly, and the latest one passes Grammarly, GPTZero
 and ZeroGPT at once. The pieces that can be deterministic are (the joining is seeded;
 ZeroGPT gives the same score for the same text), output that copies the original is
-refused, and 110 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
+refused, and 111 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
 over time, which is why every session carries controls.
 
 **Does the selection step send my text anywhere?**
@@ -399,7 +400,7 @@ humanizar-es/
 │   └── join.py              stage 3: rebuild the rhythm of each paragraph
 ├── examples/                worked examples in Spanish and English
 ├── references/              every measurement, and how to measure
-└── tests/                   110 tests on Ubuntu, macOS and Windows (no network, no model)
+└── tests/                   111 tests on Ubuntu, macOS and Windows (no network, no model)
 ```
 
 The old script names (`hip.py`, `unir.py`, `verificar_fidelidad.py`, `instalar_hip.py`)
