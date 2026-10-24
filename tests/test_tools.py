@@ -1770,7 +1770,6 @@ class Installer(unittest.TestCase):
             with open(fake, "w", encoding="utf-8") as fh:
                 fh.write("print('Available devices:')\nprint('  Vulkan0: Intel(R) Graphics (RPL-S)')\n"
                          "print('  Vulkan1: NVIDIA GeForce RTX 5060 Laptop GPU')\n")
-            import install_model
             env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake, HUMANIZE_GPU="1")
             # skip the checksums of the empty stand-in files: only the summary is under test
             code = ("import sys; sys.path.insert(0, %r); import install_model as m; "
