@@ -625,6 +625,22 @@ class Rewrite(unittest.TestCase):
             self.assertNotIn("\n", result)       # still one paragraph
             self.assertIn("microgrid", result)    # and the term is back
             self.assertIn("is about", result)     # rewritten, not the original
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--only", "1", "--candidates", "2", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            folder = out + ".candidates"
+            found = sorted(os.listdir(folder))
+            self.assertEqual(len(found), 2, r.stdout)  # whole-paragraph tries all lose «microgrid»
+            for f in found:
+                c = read(os.path.join(folder, f)).strip()
+                self.assertIn("microgrid", c)
+                self.assertNotIn("\n", c)
+
+    def test_a_try_identical_to_the_original_is_named_in_the_report(self):
+        report = {"untouched": [], "copied": [], "tells": [], "numbers": [], "symbols": []}
+        rewrite.note(report, "1 (part 3)", "Same text.", "Same text.", None,
+                     rewrite.collections.Counter(), "en")
+        self.assertEqual(report["untouched"], ["1 (part 3) (the model gave it back unchanged)"])
 
     def test_lead_replaces_the_opening_words(self):
         prompt, lead = rewrite.build_prompt("Uno de los problemas más importantes.", lead="Desde la")
@@ -1745,6 +1761,27 @@ class Installer(unittest.TestCase):
                     "--tries", "1", env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(read(log), own_adapter)
+
+    def test_the_installer_names_only_the_pinned_gpu(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("print('Available devices:')\nprint('  Vulkan0: Intel(R) Graphics (RPL-S)')\n"
+                         "print('  Vulkan1: NVIDIA GeForce RTX 5060 Laptop GPU')\n")
+            import install_model
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake, HUMANIZE_GPU="1")
+            # skip the checksums of the empty stand-in files: only the summary is under test
+            code = ("import sys; sys.path.insert(0, %r); import install_model as m; "
+                    "m.download = lambda *a, **k: None; sys.argv = ['x', '--no-test']; "
+                    "sys.exit(m.main())" % SCRIPTS)
+            r = run(sys.executable, "-c", code, env=dict(env, HUMANIZE_GPU_DEVICE="Vulkan1"))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("runs on: the GPU (Vulkan1: NVIDIA", r.stdout)
+            self.assertNotIn("Intel", r.stdout)
+            r = run(sys.executable, "-c", code, env=dict(env, HUMANIZE_GPU_DEVICE="Vulkan7"))
+            self.assertIn("HUMANIZE_GPU_DEVICE is Vulkan7", r.stdout)
 
     def test_a_file_that_does_not_match_is_set_aside_not_deleted(self):
         import contextlib

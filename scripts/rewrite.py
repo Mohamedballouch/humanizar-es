@@ -535,7 +535,8 @@ def note(report, label, p, text, fallback, lost, lang, fmt="text"):
     elif fallback == "(symbols added)":
         report["symbols"].append(f"{label} ({' '.join(symbols_added(p, text))})")
     elif text == p:
-        report["untouched"].append(f"{label} (" + ", ".join(c for c, _ in lost.most_common(2)) + ")")
+        why = ", ".join(c for c, _ in lost.most_common(2)) or "the model gave it back unchanged"
+        report["untouched"].append(f"{label} ({why})")
 
 
 SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9ÁÉÍÓÚÑ¿¡«\"“(\\])")
@@ -687,6 +688,18 @@ def one_candidate(p, args, concepts, lang):
                 item = text
             pairs.append((marker, item))
         r = blocks.rebuild(pairs, fmt)
+        return r, copied_share(p, r)
+    limit = getattr(args, "max_words", 0) or (AUTO_PARTS_WORDS if len(p.split()) > AUTO_PARTS else 0)
+    runs = parts(p, fmt, limit)
+    if len(runs) > 1:  # a long paragraph: each candidate is built part by part, one paragraph
+        out = []
+        for j, run in enumerate(runs, 1):
+            text, _, fallback, _ = rewrite_unit(run, args, concepts, lang,
+                                                args.lead if j == 1 else None)
+            if text == run or fallback:
+                return None
+            out.append(text)
+        r = ("\n" if fmt == "latex" else " ").join(out)
         return r, copied_share(p, r)
     problem, share, text, _ = one_try(p, args, concepts, lang, args.lead)
     return None if problem else (text, share)

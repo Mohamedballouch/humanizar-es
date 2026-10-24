@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "5.2.0"
+  version: "5.3.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -282,7 +282,9 @@ python3 <skill>/scripts/rewrite.py 00-original.txt -o 01-rewritten.txt --concept
 
 If the paragraph starts with a stock opening, add `--lead` with two other words that fit
 the paragraph («Desde la», «La potencia», «Para Aristóteles»; `tells.py` suggests one after a
-stock connector). Candidates land in `01-rewritten.txt.candidates/`; tries that lose a
+stock connector). A paragraph over 150 words (or `--max-words`) gets each
+candidate built part by part, still one paragraph. Candidates land in
+`01-rewritten.txt.candidates/`; tries that lose a
 concept, change a quote, invent a reference or copy the original are already discarded.
 Each candidate is printed with its tells score, and the list ends fewest tells first.
 `--max-tells 2` also discards tries above that score (it costs more tries).

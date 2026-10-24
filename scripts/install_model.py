@@ -307,6 +307,13 @@ def main():
         print(f"  {path}  {os.path.getsize(path) / 1e9:.2f} GB")
     print(f"  llama.cpp: {rewrite.llama_binary()}")
     found = None if rewrite.device_args()[1] == "0" else gpu_devices()
+    pinned = os.environ.get("HUMANIZE_GPU_DEVICE", "").strip()
+    if found and pinned:  # the run uses only that one; say so, and warn on a typo
+        mine = [d for d in found if d.split(":")[0] == pinned]
+        if not mine:
+            print(f"WARNING: HUMANIZE_GPU_DEVICE is {pinned}, and llama.cpp lists "
+                  + "; ".join(d.split(":")[0] for d in found) + ".")
+        found = mine or found
     if rewrite.device_args()[1] == "0":
         print("  runs on: the CPU (HUMANIZE_GPU=1 runs it on a GPU)")
     elif found == []:

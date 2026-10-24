@@ -1,5 +1,19 @@
 # Changelog
 
+## 5.3.0 — October 24, 2026
+
+Found by running the whole pipeline (rewrite, check, join, check, PDF) on two abstracts and
+a LaTeX paper with a stand-in model that makes the real one's mistakes: it drops a term on
+long sources, wraps a figure in `$…$`, drops a minus sign and writes British spelling.
+
+- `--candidates` on a long paragraph (over 150 words, or `--max-words`) built none: every
+  whole-paragraph try lost a term. Each candidate is now built part by part and stays one
+  paragraph.
+- A paragraph or part the model gave back word for word was reported with empty brackets;
+  the report now says so.
+- `install_model.py` names only the GPU in `HUMANIZE_GPU_DEVICE`, and warns when that name
+  is not one llama.cpp lists.
+
 ## 5.2.0 — October 23, 2026
 
 **Sturdier guards, from what went wrong on a real abstract.**
