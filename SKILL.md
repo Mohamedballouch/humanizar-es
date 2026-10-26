@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "5.5.0"
+  version: "5.6.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -245,7 +245,11 @@ python3 <skill>/scripts/rewrite.py 00-original.txt -o 01-rewritten.txt --concept
 `--only` keeps the other paragraphs and their fixes. A paragraph rewritten **in parts** (the
 run printed `paragraph 1, part 3: «…»`) is redone one part at a time: `--only 1 --part 3`
 regenerates only that part and keeps the others and their fixes; a 300-word abstract then
-costs one part's minutes, not the whole paragraph's. Measured on a 1,990-word essay in
+costs one part's minutes, not the whole paragraph's. Add `--candidates 4` to get several
+versions of that part, each saved as the whole paragraph, and adopt one with `--take`. If
+the model keeps losing or garbling terms of art («cross-entropy method», «off-window»),
+`--protect-terms` hands it the multi-word, hyphenated and numbered concepts as fixed
+placeholders it must write around (not measured yet). Measured on a 1,990-word essay in
 Grammarly: its last half scored 3% twice while it carried hand fixes of four or more words
 (a few of them the original's own words put back); after redoing those paragraphs with
 `--only` and fixing only 1-2 words, 0%. The bibliography was not the cause.
@@ -258,6 +262,8 @@ python3 <skill>/scripts/join.py 01-rewritten.txt -o 02-final.txt --concepts conc
 
 It detects English or Spanish (force it with `--lang en|es`). If it warns about words it
 lowercased, check which are proper names; add them to `concepts.txt` and run it again.
+For an abstract or any paragraph over ~150 words, add `--words-per-period 55`: `--pauses 2`
+alone gave a 300-word abstract a 150-word sentence (not measured against detectors).
 `--pauses 2` leaves two or three periods per paragraph, in blocks of
 uneven length, cutting first where a sentence already opens with «Sin embargo», «Por
 ejemplo», «Segundo»… and joining the rest with «y» or «;». Then you may swap the «y» or «;»

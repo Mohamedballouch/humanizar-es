@@ -1,5 +1,26 @@
 # Changelog
 
+## 5.6.0 — October 26, 2026
+
+From the second real-model run on the 294-word journal abstract:
+
+- **Counts in words are figures when added.** «30 independently trained teams of three
+  agents» (the teams have six) passed every check; digits and number words are now counted
+  together, so an extra «three» is an added figure and the try is not used. Dropping a count
+  in words («all three» -> «each») is still allowed.
+- **`$…$` the original never had is removed** from a try, like `\%`: all 15 tries of one part
+  wrote «$B=3$» and «$p$».
+- **`--protect-terms`** (option, not measured): the multi-word, hyphenated and numbered
+  concepts reach the model as fixed placeholders it writes around; one plain word stays
+  readable. Every try had lost or garbled a term of art.
+- **`join.py --words-per-period N`**: a long paragraph keeps about one period per N words
+  (`--pauses 2` alone gave the abstract a 150-word sentence; with 55, four sentences of
+  53–91 words). Not measured against detectors.
+- **A paragraph over 150 words gets 2 whole tries, not 6, before it is split in parts**: the
+  abstract failed 6 of 6 whole tries, 10 of its 13 minutes.
+- **`--only N --part K --candidates M`**: several versions of one part, each saved as the
+  whole paragraph; `--take` adopts one and keeps the parts record right.
+
 ## 5.5.0 — October 26, 2026
 
 **From the first run with the real model in a test session** (Qwen3-4B-Base + HIP on CPU,

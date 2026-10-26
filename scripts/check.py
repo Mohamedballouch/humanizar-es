@@ -230,14 +230,6 @@ def figures(text):
     return collections.Counter(figure_key(n) for n in found), spelled
 
 
-def _words_for(text):
-    """Values the text writes out in words («two», «sixty», «veinte»), so that turning a
-    word into digits is not a new figure."""
-    words = set(re.findall(r"[a-z]+", norm(text)))
-    values = {str(i) for lang in NUMBER_WORDS.values() for i, w in enumerate(lang) if w in words}
-    return values | {str(v) for w, v in TENS.items() if w in words}
-
-
 def numbers_lost(original, variant):
     """Figures of the original that the variant has fewer times, once per missing
     occurrence: «2020» twice in the original and once in the variant is one «2020» lost.
@@ -247,13 +239,34 @@ def numbers_lost(original, variant):
     return [spelled[k] for k, n in (want - have).items() for _ in range(n)]
 
 
+# Counts written in words, for what a version adds: «teams of three agents» where the
+# original never said three is an invented fact. «one» is left out (a pronoun as often as a
+# number), and so is «once» (Spanish eleven, English «one time»).
+WORD_VALUES = {w: str(i) for lang in NUMBER_WORDS.values() for i, w in enumerate(lang)
+               if i >= 2 and w != "once"}
+WORD_VALUES.update({w: str(v) for w, v in TENS.items() if v > 1})
+
+
+def _counts_in_words(text):
+    """Counter of the values written as words, and the first spelling of each."""
+    found = [w for w in re.findall(r"[a-z]+", norm(text)) if w in WORD_VALUES]
+    spelled = {}
+    for w in found:
+        spelled.setdefault(WORD_VALUES[w], w)
+    return collections.Counter(WORD_VALUES[w] for w in found), spelled
+
+
 def numbers_added(original, variant):
-    """Figures the variant has more times than the original: an invented year, amount or
-    percentage. A figure the original writes in words («two» -> «2») is not new."""
+    """Figures the variant has more times than the original: an invented year, amount,
+    percentage, or a count in words («teams of three agents» where the original had only
+    «all three methods»). Digits and words are counted together, so «two» -> «2» is not new.
+    Only additions: a paraphrase may drop a count in words («all three» -> «each»)."""
     have, spelled = figures(variant)
     want, _ = figures(original)
-    words = _words_for(original)
-    return [spelled[k] for k, n in (have - want).items() if k not in words for _ in range(n)]
+    have_w, spelled_w = _counts_in_words(variant)
+    want_w, _ = _counts_in_words(original)
+    extra = (have + have_w) - (want + want_w)
+    return [spelled.get(k) or spelled_w[k] for k, n in extra.items() for _ in range(n)]
 
 
 SPELLING = ((r"isation", "ization"), (r"ise", "ize"), (r"ised", "ized"), (r"ises", "izes"),

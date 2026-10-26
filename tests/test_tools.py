@@ -134,6 +134,13 @@ class Check(unittest.TestCase):
             self.assertIn("NEGATIONS the version added", r.stdout)
             self.assertIn("without having", r.stdout)
 
+    def test_a_count_in_words_the_original_never_gave_is_added(self):
+        o = "Three optimisers search. On 30 trained agent teams, all three raise profit with six agents."
+        self.assertEqual(check.numbers_added(o, o.replace("agent teams", "teams of three agents")), ["three"])
+        self.assertEqual(check.numbers_added(o, o.replace("all three raise", "each raises")), [])
+        self.assertEqual(check.numbers_added(o, o.replace("six agents", "6 agents")), [])
+        self.assertEqual(check.numbers_added(o, "One of them, once a day: " + o), [])  # «one», «once»
+
     def test_british_and_american_spelling_are_reported(self):
         o = "Optimization of the colour model and the modelling of the centre."
         v = "Optimisation of the color model and the modelling of the center."
@@ -303,6 +310,19 @@ class Join(unittest.TestCase):
         self.assertNotIn("aI", out)
         self.assertNotIn("cOVID", out)
         self.assertIn("John F. Kennedy", out)
+
+    def test_a_long_paragraph_keeps_more_periods_with_words_per_period(self):
+        sentences = [f"The plant number {i} runs a shift of {i + 2} hours and the agents follow it."
+                     for i in range(1, 13)]
+        para = " ".join(sentences) + "\n"
+        plain = join.join_text(para, pauses=2, lang="en")
+        scaled = join.join_text(para, pauses=2, lang="en", words_per_period=40)
+        periods = lambda t: len(re.findall(r"\.(?:\s|$)", t))  # noqa: E731
+        self.assertLessEqual(periods(plain), 3)
+        self.assertGreater(periods(scaled), periods(plain))
+        self.assertEqual(join.join_text("Short one. Two here. Three now. Four too.\n", pauses=2,
+                                        lang="en", words_per_period=40),
+                         join.join_text("Short one. Two here. Three now. Four too.\n", pauses=2, lang="en"))
 
     def test_english_drops_filler_openers(self):
         par = ("Remote work grew fast in 2020. Many firms kept it after the crisis. Moreover, "
@@ -664,11 +684,28 @@ class Rewrite(unittest.TestCase):
                     "--part", "9", env=env)
             self.assertEqual(r.returncode, 2)
             self.assertIn("has parts 1 to", r.stderr)
+            # Candidates for part 2 alone: whole paragraphs, measured in context, then --take.
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--only", "1", "--part", "2", "--candidates", "2", "--tries", "1",
+                    "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            cands = sorted(f for f in os.listdir(out + ".candidates") if f.startswith("p01-part2-")
+                           and f.endswith(".txt"))
+            self.assertEqual(len(cands), 2, r.stdout)
+            first = read(os.path.join(out + ".candidates", cands[0])).strip()
+            self.assertIn("every single hour", first)   # the other parts, hand fix included
+            self.assertNotIn("\n", first)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out,
+                    "--take", "1=" + os.path.join(out + ".candidates", cands[0]), env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--only", "1", "--part", "2", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # the record followed --take
             r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
                     "--only", "1", "--candidates", "2", "--tries", "1", "--max-copied", "1", env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             folder = out + ".candidates"
-            found = sorted(os.listdir(folder))
+            found = sorted(f for f in os.listdir(folder) if re.fullmatch(r"p01-\d+\.txt", f))
             self.assertEqual(len(found), 2, r.stdout)  # whole-paragraph tries all lose «microgrid»
             for f in found:
                 c = read(os.path.join(folder, f)).strip()
@@ -697,7 +734,86 @@ class Rewrite(unittest.TestCase):
                     "--max-copied", "1", env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("5.7-6.7% at", read(out))
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\n"
+                         "sys.stdout.write(' went up by 5.7–6.7% at $B=3$ in the plant, the smallest budget.\\n</target_text>')\n")
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                    "--max-copied", "1", env=env)
+            self.assertIn("at B=3 in", read(out))
+            self.assertNotIn("$", read(out))
             self.assertNotIn("\\", read(out))
+
+    def test_terms_of_art_can_be_locked_for_the_model(self):
+        concepts = check.load_concepts_from_lines(["cross-entropy method", "frozen", "directive*",
+                                                   "large language model | LLM"]) \
+            if hasattr(check, "load_concepts_from_lines") else None
+        if concepts is None:
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+                fh.write("cross-entropy method\nfrozen\ndirective*\nlarge language model | LLM\non-site\n")
+            self.addCleanup(os.remove, fh.name)
+            concepts = check.load_concepts(fh.name)
+        text = ("Frozen agents use a cross-entropy method and a large language model (LLM) to pick "
+                "directives on-site, see [1].")
+        masked, terms = rewrite.protect_terms(text, concepts)
+        self.assertIn("a [2] and a [3]", masked)               # numbered after the existing [1]
+        self.assertIn("Frozen agents", masked)                  # one plain word stays readable
+        self.assertIn("pick directives", masked)
+        self.assertEqual(sorted(terms.values()), ["cross-entropy method", "large language model", "on-site"])
+        self.assertEqual(rewrite.restore_terms(masked, terms), text)
+        self.assertIsNone(rewrite.restore_terms(masked.replace("[3]", ""), terms))
+
+    def test_protect_terms_reaches_the_model_and_comes_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            log = os.path.join(tmp, "prompt.txt")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nargs = sys.argv[1:]\n"
+                         "p = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                         f"open({log!r}, 'w', encoding='utf-8').write(p)\n"
+                         "sys.stdout.write(' now sets [1] against [2] on the line.\\n</target_text>')\n")
+            src, out, conc = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("This paper compares the cross-entropy method with random search on the line.\n")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("cross-entropy method\nrandom search\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--protect-terms", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("the [1] with [2]", read(log))
+            self.assertIn("This paper now sets cross-entropy method against random search", read(out))
+
+    def test_a_long_paragraph_gets_two_whole_tries_before_parts(self):
+        text = " ".join(f"Sentence {w} says the microgrid line runs and the agents follow the plan here."
+                        for w in ("one", "two", "three", "four", "five", "six", "seven", "eight",
+                                  "nine", "ten", "eleven", "twelve", "thirteen")) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            calls = os.path.join(tmp, "calls")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import os, sys\nargs = sys.argv[1:]\n"
+                         f"open({calls!r}, 'a').write('x')\n"
+                         "p = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                         "src = p.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+                         "out = ' '.join(src.split()[2:]).replace('runs and', 'works while')\n"
+                         "if len(src.split()) > 120: out = out.replace('microgrid ', '')\n"
+                         "sys.stdout.write(' ' + out + '\\n</target_text>')\n")
+            src, out, conc = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--tries", "6", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            parts = int(re.search(r"rewriting it in (\d+) parts", r.stdout).group(1))
+            self.assertIn("left as the original in 2 tries", r.stdout)
+            self.assertEqual(len(read(calls)), 2 + parts)
 
     def test_lead_replaces_the_opening_words(self):
         prompt, lead = rewrite.build_prompt("Uno de los problemas más importantes.", lead="Desde la")

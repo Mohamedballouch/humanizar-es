@@ -283,12 +283,14 @@ def join_with_pauses(paragraph, proper, pauses, rnd, doubtful=None, lang="es"):
 
 
 def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, lang=None,
-              pauses=None, no_dashes=False, fmt="text", only=None):
+              pauses=None, no_dashes=False, fmt="text", only=None, words_per_period=None):
     """doubtful: if it is a list, it receives the words that were lowercased without
     appearing that way anywhere else in the text (possible proper nouns).
     lang: "es", "en" or None to detect it. no_dashes: dashes between words become commas.
     fmt: "text" (plain text or Markdown) or "latex". only: the paragraph numbers to join
-    (a set), leaving the rest as they are; None joins them all."""
+    (a set), leaving the rest as they are; None joins them all. words_per_period: with
+    pauses, a long paragraph keeps more periods, about one per that many words (a 300-word
+    abstract with --pauses 2 alone came out with a 150-word sentence)."""
     frame, paragraphs = blocks.parse(text, fmt)
     lang = lang or detect_language(" ".join(blocks.prose_of(x, fmt) for x in paragraphs))
     c = LANGUAGES[lang]
@@ -299,7 +301,10 @@ def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, la
     def prose(x):
         x = replace_dashes(x) if no_dashes else x
         if pauses:
-            return join_with_pauses(x, proper, pauses, rnd, lowered, lang)
+            n = pauses
+            if words_per_period:
+                n = max(pauses, round(len(x.split()) / words_per_period) - 1)
+            return join_with_pauses(x, proper, n, rnd, lowered, lang)
         return join_paragraph(x, proper, p, rnd, max_words, lowered, lang)
 
     def one(x):
@@ -343,6 +348,9 @@ def main():
     ap.add_argument("--pauses", "--pausas", dest="pauses", type=int,
                     help="leave this many periods per paragraph (2 or 3) in blocks of uneven "
                     "length, instead of joining everything; reads better")
+    ap.add_argument("--words-per-period", dest="words_per_period", type=int, metavar="N",
+                    help="with --pauses: a long paragraph keeps about one period per N words "
+                         "(try 55 for an abstract); not measured against detectors yet")
     ap.add_argument("--only", help="join only these paragraphs (e.g. 4,7), the numbers rewrite.py "
                     "--only uses; the rest stay as they are")
     ap.add_argument("--no-dashes", "--sin-rayas", dest="no_dashes", action="store_true",
@@ -364,7 +372,7 @@ def main():
         return 2
     joined = join_text(text, concepts, args.ratio, max_words=args.max_words, doubtful=doubtful,
                        lang=lang, pauses=args.pauses, no_dashes=args.no_dashes, fmt=fmt,
-                       only=only)
+                       only=only, words_per_period=args.words_per_period)
     with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(joined)
     count = lambda t: len(re.findall(r"[.!?](?:\s|$)", t))  # noqa: E731
