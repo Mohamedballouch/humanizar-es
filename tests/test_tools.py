@@ -141,6 +141,41 @@ class Check(unittest.TestCase):
         self.assertEqual(check.numbers_added(o, o.replace("six agents", "6 agents")), [])
         self.assertEqual(check.numbers_added(o, "One of them, once a day: " + o), [])  # «one», «once»
 
+    def test_acronym_definitions_are_found_and_required(self):
+        o = ("We use a large language model (LLM, Claude) and a Markov Decision Process (MDP), "
+             "see Fig. 2 (PDF) and Smith (2020).")
+        self.assertEqual(check.definitions(o), [("large language model", "LLM"),
+                                                ("Markov Decision Process", "MDP")])
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b, c = (os.path.join(tmp, n) for n in ("o.txt", "v.txt", "c.txt"))
+            with open(a, "w", encoding="utf-8") as fh:
+                fh.write(o + "\n")
+            with open(b, "w", encoding="utf-8") as fh:
+                fh.write("An LLM (Claude) and a Markov Decision Process (MDP) are used, see "
+                         "Fig. 2 (PDF) and Smith (2020).\n")
+            with open(c, "w", encoding="utf-8") as fh:
+                fh.write("LLM\n")
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", c)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("large language model (LLM)", r.stdout)
+
+    def test_a_word_limit_fails_a_longer_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b, c = (os.path.join(tmp, n) for n in ("o.txt", "v.txt", "c.txt"))
+            with open(a, "w", encoding="utf-8") as fh:
+                fh.write("The microgrid saves money every single day.\n")
+            with open(b, "w", encoding="utf-8") as fh:
+                fh.write("Every single day, the on-site microgrid saves the plant some money.\n")
+            with open(c, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", c)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIn("WORDS:", r.stdout)
+            self.assertIn("11 (+4)", r.stdout)
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", c, "--word-limit", "10")
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("Over the limit of 10", r.stdout)
+
     def test_british_and_american_spelling_are_reported(self):
         o = "Optimization of the colour model and the modelling of the centre."
         v = "Optimisation of the color model and the modelling of the center."
@@ -815,6 +850,25 @@ class Rewrite(unittest.TestCase):
             self.assertIn("left as the original in 2 tries", r.stdout)
             self.assertEqual(len(read(calls)), 2 + parts)
 
+    def test_resume_redoes_only_what_is_still_the_original(self):
+        text = ("The first paragraph talks about the plant and its energy use today.\n\n"
+                "The second paragraph talks about the agents and the supervisor here.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = self._echo_llama(tmp)
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            with open(out, "w", encoding="utf-8") as fh:  # stopped after paragraph 1
+                fh.write("Already rewritten by hand, kept.\n\n" + text.split("\n\n")[1])
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--resume",
+                    "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("1 paragraphs kept, 1 to do", r.stdout)
+            first, second = read(out).strip().split("\n\n")
+            self.assertEqual(first, "Already rewritten by hand, kept.")
+            self.assertNotEqual(second, text.split("\n\n")[1].strip())
+
     def test_lead_replaces_the_opening_words(self):
         prompt, lead = rewrite.build_prompt("Uno de los problemas más importantes.", lead="Desde la")
         self.assertEqual(lead, "Desde la")
@@ -1347,6 +1401,57 @@ REVERSING_LLAMA = (
     "# every word changes; placeholders, figures and punctuation stay\n"
     "out = re.sub(r'[A-Za-z]{2,}', lambda m: m.group(0)[::-1], rest)\n"
     "sys.stdout.buffer.write((' ' + out + '\\n</target_text>').encode('utf-8'))\n")
+
+
+class References(unittest.TestCase):
+    """A manuscript's references are never rewritten: they go to the frame, byte for byte."""
+    ENTRY = "[1] A. Smith, B. Lee. Microgrid control with deep learning. IEEE Trans., 2021."
+
+    def _prose(self, text):
+        frame, paras = blocks.parse(text)
+        self.assertEqual(blocks.unparse(frame, paras), text)
+        return paras
+
+    def test_markdown_references_until_the_next_heading(self):
+        text = ("# Results\n\nProfit rose by 5.7%.\n\n## References\n\n" + self.ENTRY +
+                "\n\n1. Wang, C. (2022). Budgeted search. Energy.\n\n## Appendix A\n\n"
+                "The appendix is prose.\n")
+        self.assertEqual(self._prose(text), ["# Results", "Profit rose by 5.7%.", "## Appendix A",
+                                             "The appendix is prose."])
+
+    def test_plain_title_lines_in_english_and_spanish(self):
+        for title in ("REFERENCES", "6. References", "Bibliografía", "Referencias bibliográficas:",
+                      "**Bibliography**", "Works Cited"):
+            text = "The paper ends here.\n\n" + title + "\n\n" + self.ENTRY + "\n"
+            self.assertEqual(self._prose(text), ["The paper ends here."], title)
+
+    def test_a_thesis_chapter_after_its_references_is_rewritten(self):
+        text = ("Chapter two ends.\n\nReferences\n\n" + self.ENTRY +
+                "\n\nChapter 3\n\nThe third chapter is prose.\n")
+        self.assertEqual(self._prose(text), ["Chapter two ends.", "Chapter 3",
+                                             "The third chapter is prose."])
+
+    def test_a_paragraph_that_mentions_references_is_not_a_heading(self):
+        text = "The references in this field are few, and most are old.\n\nMore prose.\n"
+        self.assertEqual(len(self._prose(text)), 2)
+
+    def test_rewrite_leaves_the_references_alone(self):
+        text = "Profit rose by 5.7% at the plant.\n\n## References\n\n" + self.ENTRY + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nsys.stdout.write(' went up by 5.7% at the plant floor.\\n</target_text>')\n")
+            src, out = os.path.join(tmp, "in.md"), os.path.join(tmp, "out.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                    "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertTrue(read(out).endswith("## References\n\n" + self.ENTRY + "\n"), read(out))
+            self.assertIn("Paragraph 1 of 1", r.stdout)
 
 
 class Latex(unittest.TestCase):

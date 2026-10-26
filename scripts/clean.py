@@ -176,6 +176,7 @@ def do_import(args):
               "Export again, or fix the «=== n ===» lines.", file=sys.stderr)
         return 2
     concepts = check.load_concepts(args.concepts) if args.concepts else []
+    concepts = check.with_definitions(concepts, latex.plain(text) if fmt == "latex" else text)
 
     problems, edited, results = [], [], {}
     words_total = changed_total = 0

@@ -401,6 +401,9 @@ def main():
     ap.add_argument("--part", type=int, metavar="K",
                     help="with --only N: redo only part K of a paragraph that was rewritten in "
                          "parts, keeping the other parts and their hand fixes")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue an interrupted run: keep every paragraph already rewritten in "
+                         "the output and redo only those still as in the original")
     ap.add_argument("--protect-terms", dest="protect_terms", action="store_true",
                     help="give the model the concepts of --concepts as fixed placeholders, so it "
                          "writes around them and cannot drop or garble them (not measured yet)")
@@ -442,9 +445,21 @@ def main():
         text = fh.read()
     concepts = check.load_concepts(args.concepts) if args.concepts else []
     args.fmt = blocks.format_of(args.original)
+    # an acronym's long form («large language model (LLM)») is a concept too
+    concepts = check.with_definitions(concepts, latex.plain(text) if args.fmt == "latex" else text)
     frame, paragraphs = blocks.parse(text, args.fmt)
     lang = join.detect_language(" ".join(blocks.prose_of(b, args.fmt) for b in paragraphs))
     kept, kept_frame, only = None, None, None
+    if args.resume and os.path.isfile(args.output) and not args.only:
+        with open(args.output, encoding="utf-8-sig") as fh:
+            done = blocks.parse(fh.read(), args.fmt)[1]
+        if len(done) == len(paragraphs):
+            todo = [i for i, (a, b) in enumerate(zip(paragraphs, done), 1)
+                    if a == b and blocks.kind(a, args.fmt) in blocks.PROSE and not is_title(a)]
+            print(f"Resuming: {len(paragraphs) - len(todo)} paragraphs kept, {len(todo)} to do")
+            if not todo:
+                return 0
+            args.only = ",".join(map(str, todo))
     if args.part is not None and (not args.only or "," in args.only):
         print("ERROR: --part K needs --only with one paragraph, like --only 1 --part 3",
               file=sys.stderr)

@@ -291,6 +291,41 @@ def spelling_changes(original, variant):
     return out
 
 
+SMALL_WORDS = {"of", "and", "the", "for", "to", "in", "on", "a", "an", "de", "del", "la", "el",
+               "los", "las", "y", "en", "por", "para"}
+ACRONYM = re.compile(r"\(([A-Z][A-Za-z0-9]*[A-Z][A-Za-z0-9]*?)s?(?=[,;)])")
+
+
+def definitions(text):
+    """[(long form, acronym)] the text defines, like «Markov Decision Process (MDP)» or
+    «a large language model (LLM, Claude…)»: the words before the bracket whose initials
+    spell the acronym. A rewrite that keeps «LLM» and drops «large language model» has lost
+    the definition a paper must give at first use."""
+    found = []
+    for m in ACRONYM.finditer(text):
+        acr = m.group(1)
+        letters = [c.lower() for c in acr if c.isalpha() and (c.isupper() or c.isdigit())] or \
+            [c.lower() for c in acr if c.isalpha()]
+        words = re.findall(r"[\w’'-]+", text[max(0, m.start() - 160):m.start()])
+        for n in range(1, min(len(words), len(letters) + 4) + 1):
+            tail = words[-n:]
+            initials = [p[0].lower() for w in tail if w.lower() not in SMALL_WORDS
+                        for p in w.split("-") if p]
+            if initials == letters and tail[0].lower() not in SMALL_WORDS:
+                long_form = " ".join(tail)
+                if (long_form, acr) not in found:
+                    found.append((long_form, acr))
+                break
+    return found
+
+
+def with_definitions(concepts, text):
+    """The concepts plus every long form the text defines that they do not already hold."""
+    have = {norm(v) for _, variants in concepts for v in variants}
+    extra = [(f"{lf} ({acr})", [lf]) for lf, acr in definitions(text) if norm(lf) not in have]
+    return list(concepts) + extra
+
+
 def short_name(path, width=18):
     base = path.replace("\\", "/").split("/")[-1]
     return base if len(base) <= width else base[: width - 1] + "…"
@@ -304,6 +339,8 @@ def main():
     ap.add_argument("variants", nargs="*")
     ap.add_argument("--concepts", "--conceptos", dest="concepts",
                     help="file with one concept per line")
+    ap.add_argument("--word-limit", dest="word_limit", type=int, metavar="N",
+                    help="fail if a version has more than N words (a journal's abstract limit)")
     ap.add_argument("--list", "--listar", dest="list", action="store_true",
                     help="show the concepts and exit")
     args = ap.parse_args()
@@ -338,6 +375,7 @@ def main():
     if not concepts:
         print("ERROR: no concepts to check. Pass --concepts.", file=sys.stderr)
         return 2
+    concepts = with_definitions(concepts, texts[args.original])  # «Markov Decision Process (MDP)»
 
     files = list(dict.fromkeys([args.original] + args.variants))  # a file named twice counts once
     args.variants = [f for f in files if f != args.original]
@@ -411,6 +449,17 @@ def main():
               "a one-word fix each):")
         for f, changes in respelled:
             print(f"  {short_name(f, 30)}: " + ", ".join(f"«{a}» -> «{b}»" for a, b in changes))
+
+    words = {f: len(re.findall(r"\w+(?:[-'’]\w+)*", t)) for f, t in texts.items()}
+    print("\nWORDS: " + ", ".join(
+        f"{short_name(f, 30)} {words[f]}" + ("" if f == args.original else
+                                             f" ({words[f] - words[args.original]:+d})")
+        for f in files))
+    over = [f for f in args.variants if args.word_limit and words[f] > args.word_limit]
+    if over:
+        failed = True
+        print(f"  Over the limit of {args.word_limit}: " + ", ".join(short_name(f, 30) for f in over)
+              + ". Regenerate the longest paragraph or cut a word or two by hand.")
 
     changed = []
     for f in args.variants:

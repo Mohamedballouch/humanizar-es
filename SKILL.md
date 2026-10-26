@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "5.6.0"
+  version: "5.7.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -30,7 +30,12 @@ If the text came through chat, write it to `00-original.txt`, with paragraphs se
 a blank line. Leave out a chat model's wrapper around the text («Certainly! Here is…», "I
 hope this helps", "Let me know if…"): it is not part of the text. Never overwrite the
 original. Markdown is fine: code, tables, headings and quotations are kept as they are, and
-a list is rewritten item by item with its markers (short items stay as they are).
+a list is rewritten item by item with its markers (short items stay as they are). A
+**References / Bibliography / Referencias** section is never rewritten, in text and
+Markdown as in LaTeX: everything from that heading to the next heading of its level, an
+appendix or a new chapter is copied byte for byte. Acronym definitions («Markov Decision
+Process (MDP)») are found and kept like concepts: a rewrite that keeps «MDP» and drops its
+long form is refused.
 
 **A paper in LaTeX** (journal or conference): copy the main `.tex` to `00-original.tex` in
 the paper's folder (where its figures and `.bib` live) and use `.tex` names in every step
@@ -167,7 +172,10 @@ Tell the user: about 30 seconds per paragraph on an M4 Mac, 1 to 3 minutes on an
 on the CPU, free. With a GPU, `HUMANIZE_GPU=1` (set before the session starts) runs it
 there, much faster; `install_model.py` says whether llama.cpp sees the GPU. If your
 environment cuts long commands, run it in the background and read its output: `rewrite.py`
-saves the file after every paragraph and prints its progress.
+saves the file after every paragraph and prints its progress. A thesis or a long report
+takes hours on a CPU: if the run stops, `--resume` keeps every paragraph already rewritten
+and redoes only the rest. A thesis split into chapter files (`\input{ch2}`) is done one
+file at a time, each with its own `00-original`.
 
 ```bash
 python3 <skill>/scripts/rewrite.py 00-original.txt -o 01-rewritten.txt --concepts concepts.txt
@@ -290,6 +298,9 @@ join again.
 ```bash
 python3 <skill>/scripts/check.py 00-original.txt 02-final.txt --concepts concepts.txt
 ```
+
+For a journal abstract with a word limit, add `--word-limit 250` (the journal's number):
+`check.py` prints every version's word count and fails one that is over.
 
 **Every figure must survive.** `check.py` counts each number of the original (years,
 amounts, percentages, decimals with their precision, «siglo XX») and exits with 1 if a

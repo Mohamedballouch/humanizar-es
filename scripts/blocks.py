@@ -45,7 +45,68 @@ def parse(text, fmt="text"):
     paras = split(text)
     if not paras:
         return [text], []
-    return [""] + ["\n\n"] * (len(paras) - 1) + ["\n"], paras
+    # The file is the blocks joined by blank lines plus a final line end; the frame is
+    # what lies between the blocks that are rewritten, a references section included.
+    frame, kept, cur = [], [], ""
+    zone = reference_zone(paras)
+    for i, b in enumerate(paras):
+        cur += "" if i == 0 else "\n\n"
+        if i in zone:  # a bibliography is copied as it is, like LaTeX's frame
+            cur += b
+            continue
+        frame.append(cur)
+        kept.append(b)
+        cur = ""
+    if not kept:
+        return [text], []
+    frame.append(cur + "\n")
+    return frame, kept
+
+
+REFERENCES = re.compile(
+    r"(?:references?|bibliography|works cited|literature cited|reference list|cited works|"
+    r"bibliograf[ií]a|referencias(?: bibliogr[aá]ficas)?|obras citadas|fuentes)", re.I)
+AFTER_REFERENCES = re.compile(r"(?:appendix|appendices|annex|anexos?|ap[eé]ndices?|chapter|"
+                              r"cap[ií]tulo|part|parte)\b", re.I)
+
+
+def _heading_text(block):
+    """(level, words) of a heading or a title line («## 6. References», «REFERENCES:»,
+    «**Bibliography**»); (None, None) for anything else."""
+    lines = [ln for ln in block.split("\n") if ln.strip()]
+    if len(lines) == 1 and HEADING.match(lines[0].lstrip()):
+        level = len(lines[0].lstrip()) - len(lines[0].lstrip().lstrip("#"))
+        words = lines[0].lstrip().lstrip("#")
+    elif len(lines) == 2 and re.fullmatch(r"\s*(?:=+|-+)\s*", lines[1]):
+        level, words = (1 if "=" in lines[1] else 2), lines[0]
+    elif len(lines) == 1 and len(lines[0].split()) <= 4:
+        level, words = 7, lines[0]  # a plain title line: it ends at an appendix or the end
+    else:
+        return None, None
+    words = re.sub(r"^[\s*_]*(?:[0-9IVX]+[.)]?\s+)?|[\s*_:.]*$", "", words.strip())
+    return level, words
+
+
+def reference_zone(paras):
+    """Indexes of the blocks that make up a references section of a text or Markdown
+    manuscript, its heading included: from «References» (or «Bibliography», «Referencias»…)
+    to the next heading of the same or a higher level, an appendix, or the end. Rewriting
+    a bibliography entry by entry would change authors, titles and years."""
+    zone = set()
+    level = None
+    for i, b in enumerate(paras):
+        h_level, words = _heading_text(b)
+        if level is not None:
+            if h_level is not None and (AFTER_REFERENCES.match(words or "")
+                                        or (h_level < 7 and h_level <= level)):
+                level = None
+            else:
+                zone.add(i)
+                continue
+        if h_level is not None and REFERENCES.fullmatch(words or ""):
+            level = h_level
+            zone.add(i)
+    return zone
 
 
 def unparse(frame, paragraphs):

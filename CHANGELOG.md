@@ -1,5 +1,23 @@
 # Changelog
 
+## 5.7.0 — October 26, 2026
+
+**For journal articles, theses and reports.**
+
+- **A references section is never rewritten in text and Markdown either** (LaTeX's
+  bibliography always was). Found by test: a Markdown manuscript's «## References» entries
+  were prose and list blocks, so the base model would have rewritten authors, titles and
+  years. From a References / Bibliography / Works Cited / Referencias / Bibliografía heading
+  (Markdown, underlined, or a plain title line, numbered or bold) to the next heading of its
+  level, an appendix or a new chapter, everything is copied byte for byte.
+- **Acronym definitions are concepts.** «a large language model (LLM, …)» came back as «an
+  LLM» in a real run; `check.py`, `rewrite.py` and `clean.py` now find each long form the
+  original defines (its initials spell the acronym) and require it.
+- **`check.py` prints word counts**, and `--word-limit N` fails a version over a journal's
+  abstract limit (the real abstract went from 294 to 302 words).
+- **`rewrite.py --resume`** continues an interrupted run (a thesis takes hours on a CPU):
+  paragraphs already rewritten in the output stay, the rest are redone.
+
 ## 5.6.0 — October 26, 2026
 
 From the second real-model run on the 294-word journal abstract:
