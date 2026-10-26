@@ -164,6 +164,25 @@ A different method is needed for it (for example, a base model fine-tuned on hum
 prose). Contributions welcome. Note: GPTZero's percentages are the model's confidence in its
 classification of the whole text, not a share of the words.
 
+## 2e. A journal abstract with the real model (October 26): fidelity, not detectors
+
+One English abstract, 294 words in one paragraph, 41 concepts, 19 figures (a «−0.7», en-dash
+ranges, British spelling). Qwen3-4B-Base Q8_0 + HIP on 4 CPU cores. **No detector was run:
+these rows are about what the pipeline keeps and loses.**
+
+| Run | Whole tries passed | Parts | Time | After the guards |
+|---|---|---|---|---|
+| 1 (5.4.1) | 0 of 6 | 4, 1 kept as the original | 15 min | Every check passed; reading found «supervised» for «controlled», «generated without having seen» for «made after» (an inversion), a garbled sentence, and «6.7%\%» |
+| 2 (5.5.0) | 0 of 6 | 4, all rewritten | 13 min | Every check passed; reading found «teams of three agents» (six), «as measured by throughput» (a mechanism made a measurement), a garbled sentence. Parts 2 and 3 redone with `--part`: 6 tries kept the original, 15 tries passed, one with stray `$` |
+| 3, `--protect-terms` | 0 of 6 | 4, 1 kept as the original | 18 min | Every check passed; the model put a locked term in the wrong place («the optimiser's curse directives») and lost the parentheses of a list |
+
+What it changed: concepts now match across hyphens, apostrophes and spelling; `\%` and `$…$`
+are repaired; added counts in words («three») are added figures; added negations are
+reported; a long paragraph is split after 2 whole tries; parts can be redone and get
+candidates one by one; `--words-per-period` keeps a long paragraph's sentences readable.
+`--protect-terms` did not help on this abstract and stays off. Reading every paragraph
+against the original (step 6) caught what no check did, in all three runs.
+
 ## 3. Why a base model
 
 Xu et al. (2026), *Base Models Look Human To AI Detectors*

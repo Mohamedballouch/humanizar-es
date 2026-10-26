@@ -10,9 +10,10 @@ From the second real-model run on the 294-word journal abstract:
   in words («all three» -> «each») is still allowed.
 - **`$…$` the original never had is removed** from a try, like `\%`: all 15 tries of one part
   wrote «$B=3$» and «$p$».
-- **`--protect-terms`** (option, not measured): the multi-word, hyphenated and numbered
-  concepts reach the model as fixed placeholders it writes around; one plain word stays
-  readable. Every try had lost or garbled a term of art.
+- **`--protect-terms`** (option, off): the multi-word, hyphenated and numbered concepts reach
+  the model as fixed placeholders it writes around. Tried on the abstract: whole tries still
+  0 of 6, and the model put a locked term in the wrong place («the optimiser's curse
+  directives»). It stays off; references/evidence.md §2e has the three runs.
 - **`join.py --words-per-period N`**: a long paragraph keeps about one period per N words
   (`--pauses 2` alone gave the abstract a 150-word sentence; with 55, four sentences of
   53–91 words). Not measured against detectors.

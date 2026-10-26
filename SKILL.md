@@ -249,7 +249,8 @@ costs one part's minutes, not the whole paragraph's. Add `--candidates 4` to get
 versions of that part, each saved as the whole paragraph, and adopt one with `--take`. If
 the model keeps losing or garbling terms of art («cross-entropy method», «off-window»),
 `--protect-terms` hands it the multi-word, hyphenated and numbered concepts as fixed
-placeholders it must write around (not measured yet). Measured on a 1,990-word essay in
+placeholders; on a real abstract it did not help (the model put a locked term in the wrong
+place), so try candidates first. Measured on a 1,990-word essay in
 Grammarly: its last half scored 3% twice while it carried hand fixes of four or more words
 (a few of them the original's own words put back); after redoing those paragraphs with
 `--only` and fixing only 1-2 words, 0%. The bibliography was not the cause.
