@@ -175,12 +175,15 @@ these rows are about what the pipeline keeps and loses.**
 | 1 (5.4.1) | 0 of 6 | 4, 1 kept as the original | 15 min | Every check passed; reading found «supervised» for «controlled», «generated without having seen» for «made after» (an inversion), a garbled sentence, and «6.7%\%» |
 | 2 (5.5.0) | 0 of 6 | 4, all rewritten | 13 min | Every check passed; reading found «teams of three agents» (six), «as measured by throughput» (a mechanism made a measurement), a garbled sentence. Parts 2 and 3 redone with `--part`: 6 tries kept the original, 15 tries passed, one with stray `$` |
 | 3, `--protect-terms` | 0 of 6 | 4, 1 kept as the original | 18 min | Every check passed; the model put a locked term in the wrong place («the optimiser's curse directives») and lost the parentheses of a list |
+| 4, LaTeX (5.7.0) | 0 of 2, then split | 4, 1 kept as the original, 1 copied 59% | 16 min | The abstract with 5 `\cite` and 6 inline formulas: every citation and formula kept in place, the rest of the file identical, the PDF compiled. Reading found «no significant difference in superiority or equivalence» for «neither superiority nor equivalence is established» (the added-negation report named it), «starts» lost, the off-window sentence garbled again, «at» lost |
 
 What it changed: concepts now match across hyphens, apostrophes and spelling; `\%` and `$…$`
 are repaired; added counts in words («three») are added figures; added negations are
 reported; a long paragraph is split after 2 whole tries; parts can be redone and get
 candidates one by one; `--words-per-period` keeps a long paragraph's sentences readable.
-`--protect-terms` did not help on this abstract and stays off. Reading every paragraph
+`--protect-terms` did not help on this abstract and stays off. The LaTeX placeholders for
+`\cite` and math, which sit after a word or in brackets, held in every try; the ones for
+terms inside a noun phrase did not. Reading every paragraph
 against the original (step 6) caught what no check did, in all three runs.
 
 ## 3. Why a base model
