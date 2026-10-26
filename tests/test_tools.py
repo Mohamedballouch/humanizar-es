@@ -110,6 +110,30 @@ class Check(unittest.TestCase):
         self.assertEqual(check.figures(o)[0]["19"], 1)  # COVID-19 has no negative 19
         self.assertEqual(check.figures(o)[0]["7"], 1)   # nor «5-7» a negative 7
 
+    def test_concepts_match_across_hyphens_apostrophes_and_spelling(self):
+        found = lambda term, text: bool(check.pattern(term).search(check.norm(text)))  # noqa: E731
+        self.assertTrue(found("on-site microgrid", "an onsite microgrid"))
+        self.assertTrue(found("on-site microgrid", "an on site microgrid"))
+        self.assertTrue(found("realised-profit", "the realized profit"))
+        self.assertTrue(found("optimiser's curse", "the optimizer’s curse"))
+        self.assertTrue(found("modelling", "modeling"))
+        self.assertFalse(found("modelling", "models"))
+        self.assertFalse(found("realise", "reality"))
+        self.assertFalse(found("ser", "servicio"))
+
+    def test_check_reports_negations_the_version_added(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            o, v, c = (os.path.join(tmp, n) for n in ("o.txt", "v.txt", "c.txt"))
+            with open(o, "w", encoding="utf-8") as fh:
+                fh.write("Its first proposals, made after the incumbent was scored, use the microgrid.\n")
+            with open(v, "w", encoding="utf-8") as fh:
+                fh.write("Its first proposals, made without having seen the score, use the microgrid.\n")
+            with open(c, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            r = run(sys.executable, script("check.py"), o, v, "--concepts", c)
+            self.assertIn("NEGATIONS the version added", r.stdout)
+            self.assertIn("without having", r.stdout)
+
     def test_british_and_american_spelling_are_reported(self):
         o = "Optimization of the colour model and the modelling of the centre."
         v = "Optimisation of the color model and the modelling of the center."
@@ -626,6 +650,20 @@ class Rewrite(unittest.TestCase):
             self.assertNotIn("\n", result)       # still one paragraph
             self.assertIn("microgrid", result)    # and the term is back
             self.assertIn("is about", result)     # rewritten, not the original
+            self.assertIn("paragraph 1, part 2:", r.stdout)
+            # Redo only part 2: a hand fix in part 1 survives, part 2 is regenerated.
+            fixed = result.replace("each hour", "every single hour", 1)
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write(fixed + "\n")
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--only", "1", "--part", "2", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("part 2 of", r.stdout)
+            self.assertIn("every single hour", read(out))
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--only", "1",
+                    "--part", "9", env=env)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("has parts 1 to", r.stderr)
             r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
                     "--only", "1", "--candidates", "2", "--tries", "1", "--max-copied", "1", env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -642,6 +680,24 @@ class Rewrite(unittest.TestCase):
         rewrite.note(report, "1 (part 3)", "Same text.", "Same text.", None,
                      rewrite.collections.Counter(), "en")
         self.assertEqual(report["untouched"], ["1 (part 3) (the model gave it back unchanged)"])
+
+    def test_a_latex_percent_in_plain_text_is_repaired(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\n"
+                         "sys.stdout.write(' went up by 5.7-6.7\\\\% at the budget of three in the plant.\\n</target_text>')\n")
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Daily profit rose by 5.7–6.7% at the smallest budget of three.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                    "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("5.7-6.7% at", read(out))
+            self.assertNotIn("\\", read(out))
 
     def test_lead_replaces_the_opening_words(self):
         prompt, lead = rewrite.build_prompt("Uno de los problemas más importantes.", lead="Desde la")

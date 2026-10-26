@@ -64,10 +64,37 @@ NOT_PROPER = {
 }
 
 
+APOSTROPHES = str.maketrans({"’": "'", "‘": "'", "ʼ": "'", "‐": "-", "‑": "-"})
+
+
 def norm(s):
-    """Lowercase and without accents, to compare regardless of spelling."""
-    s = unicodedata.normalize("NFD", s.lower())
+    """Lowercase and without accents, curly apostrophes straight, to compare regardless of
+    spelling."""
+    s = unicodedata.normalize("NFD", s.lower().translate(APOSTROPHES))
     return "".join(c for c in s if unicodedata.category(c) != "Mn")
+
+
+# British and American spellings of the same word match each other in a concept:
+# «realised» finds «realized», «optimiser's» finds «optimizer's», «modelling» «modeling».
+FLEX = ((re.compile(r"(?<=\w)i[sz](?=(?:e|es|ed|er|ers|ing|ation|ations|able)$)"), "i[sz]"),
+        (re.compile(r"(?<=\w)y[sz](?=(?:e|es|ed|er|ers|ing)$)"), "y[sz]"),
+        (re.compile(r"(?<=[aeiou])ll(?=(?:ing|ed|er|ers)$)"), "ll?"))
+
+
+def _word(w):
+    """One word of a concept as a regex: hyphens match a hyphen, a space or nothing
+    («on-site» = «on site» = «onsite»), and British and American spellings match."""
+    out = []
+    for piece in w.split("-"):
+        stem = re.sub(r"'s$", "", piece)
+        rx = re.escape(stem)
+        for pat, repl in FLEX:
+            m = pat.search(stem)
+            if m:
+                rx = re.escape(stem[:m.start()]) + repl + re.escape(stem[m.end():])
+                break
+        out.append(rx + (re.escape(piece[len(stem):]) if stem != piece else ""))
+    return r"[\s-]?".join(out)
 
 
 def pattern(term):
@@ -75,13 +102,13 @@ def pattern(term):
     by prefix. So "ser" does not match "servicio"."""
     term = norm(term).strip()
     prefix = term.endswith("*")
-    parts = [re.escape(p) for p in term.rstrip("*").split()]
+    parts = [_word(p) for p in term.rstrip("*").split()]
     if not prefix and re.search(r"[^aeiou]y$", parts[-1]):
         parts[-1] = parts[-1][:-1] + "(?:y|ie)"  # policy, policies
     elif not prefix and parts[-1].endswith("z"):
         parts[-1] = parts[-1][:-1] + "(?:z|c(?=es))"  # luz, luces
     end = "" if prefix else r"(?:e?s)?(?!\w)"
-    return re.compile(r"(?<!\w)" + r"\s+".join(parts) + end)
+    return re.compile(r"(?<!\w)" + r"[\s-]+".join(parts) + end)
 
 
 def load_concepts(path):
@@ -341,6 +368,12 @@ def main():
         missing = sorted(neg_original - negations(texts[f]))  # counts: one lost of two shows
         if missing:
             warnings.append((f, missing))
+    added_neg = [(f, sorted(negations(texts[f]) - neg_original)) for f in args.variants]
+    added_neg = [(f, a) for f, a in added_neg if a]
+    if added_neg:
+        print("\nNEGATIONS the version added (an inversion often starts here; read each one):")
+        for f, a in added_neg:
+            print(f"  {short_name(f, 30)}: " + ", ".join(f"«{x}»" for x in a))
     if warnings:
         print("\nNEGATIONS from the original that no longer appear the same (review by hand):")
         print("  Many are legitimate rewordings. Look for the ones that change the meaning,")

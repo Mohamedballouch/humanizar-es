@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "5.4.1"
+  version: "5.5.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -217,7 +217,9 @@ prose, emojis in headings and lists, arrows, Title Case Headings): those you may
 hand, with the user's agreement, because removing markup adds no words.
 
 Then **compare every paragraph of `01-rewritten.txt` with the original** and list what
-really changed. Typical slips:
+really changed. Start with the negations `check.py` says the version **added**: on a real
+abstract, «made after only the incumbent has been scored» came back as «generated without
+having seen the incumbent score», an inversion every other check passed. Typical slips:
 
 - a changed detail ("many" → "the majority"; "physical office" → "fixed schedule");
 - an inverted or overstated idea ("were forced to work from home" where it said "split
@@ -240,7 +242,10 @@ with the model and review it again:
 python3 <skill>/scripts/rewrite.py 00-original.txt -o 01-rewritten.txt --concepts concepts.txt --only 6,11
 ```
 
-`--only` keeps the other paragraphs and their fixes. Measured on a 1,990-word essay in
+`--only` keeps the other paragraphs and their fixes. A paragraph rewritten **in parts** (the
+run printed `paragraph 1, part 3: «…»`) is redone one part at a time: `--only 1 --part 3`
+regenerates only that part and keeps the others and their fixes; a 300-word abstract then
+costs one part's minutes, not the whole paragraph's. Measured on a 1,990-word essay in
 Grammarly: its last half scored 3% twice while it carried hand fixes of four or more words
 (a few of them the original's own words put back); after redoing those paragraphs with
 `--only` and fixing only 1-2 words, 0%. The bibliography was not the cause.

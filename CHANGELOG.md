@@ -1,5 +1,25 @@
 # Changelog
 
+## 5.5.0 — October 26, 2026
+
+**From the first run with the real model in a test session** (Qwen3-4B-Base + HIP on CPU,
+a 294-word journal abstract, 15 minutes). Every whole-paragraph try lost a term, the
+automatic split rewrote it in 4 parts and kept one paragraph, and all figures and concepts
+passed; reading it showed what the guards missed.
+
+- **Concepts match across hyphens, apostrophes and spelling.** «on-site» = «on site» =
+  «onsite», a curly apostrophe = a straight one, «realised» = «realized», «modelling» =
+  «modeling». A concept typed with a straight apostrophe used to fail against the user's own
+  original with a curly one, and part 4 was kept as the original over «realised-profit».
+- **HIP's «\%» in plain text** is turned into «%». It used to be kept as a stray symbol, and
+  the percent repair then wrote «6.7%\%».
+- **`check.py` reports negations the version added.** The run turned «made after only the
+  incumbent has been scored» into «generated without having seen the incumbent score»; the
+  added «without» is where to look first.
+- **`rewrite.py --only N --part K`** regenerates one part of a paragraph rewritten in parts
+  and keeps the others and their hand fixes (the parts are saved in `….parts.json`, and the
+  run prints each part's first words).
+
 ## 5.4.1 — October 26, 2026
 
 From cleaning two real AI texts by hand through the gate (the English example essay: 20% of

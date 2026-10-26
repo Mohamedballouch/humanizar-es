@@ -44,6 +44,7 @@ usage:
 import argparse
 import collections
 import difflib
+import json
 import os
 import re
 import shutil
@@ -396,6 +397,9 @@ def main():
                     "from the original, keeping the others and their hand fixes")
     ap.add_argument("--lead", help="opening words for the rewritten paragraphs instead of the "
                     "original's first two (e.g. \"Desde la\"); use it with --only")
+    ap.add_argument("--part", type=int, metavar="K",
+                    help="with --only N: redo only part K of a paragraph that was rewritten in "
+                         "parts, keeping the other parts and their hand fixes")
     ap.add_argument("--max-words", dest="max_words", type=int, default=0, metavar="N",
                     help="rewrite a paragraph longer than N words in runs of whole sentences "
                          "and put it back as one paragraph (for a long abstract that keeps "
@@ -437,6 +441,10 @@ def main():
     frame, paragraphs = blocks.parse(text, args.fmt)
     lang = join.detect_language(" ".join(blocks.prose_of(b, args.fmt) for b in paragraphs))
     kept, kept_frame, only = None, None, None
+    if args.part is not None and (not args.only or "," in args.only or args.candidates):
+        print("ERROR: --part K needs --only with one paragraph, like --only 1 --part 3, and "
+              "no --candidates", file=sys.stderr)
+        return 2
     if args.only:
         only = parse_only(args.only, len(paragraphs))
         if only is None:
@@ -484,8 +492,10 @@ def one_try(p, args, concepts, lang, lead=None):
         plain_p = latex.strip_placeholders(visible)
     else:
         visible, pieces, plain_p = p, None, p
-    r = restore_percent_signs(visible, rewrite_paragraph(visible, args.threads, args.temperature,
-                                                         lead, lang))
+    r = rewrite_paragraph(visible, args.threads, args.temperature, lead, lang)
+    if pieces is None and "\\%" not in visible:
+        r = r.replace("\\%", "%")  # HIP writes LaTeX's «\%» for a plain «%» now and then
+    r = restore_percent_signs(visible, r)
     if pieces is None:
         text, plain_r = r, r
     else:
@@ -607,6 +617,10 @@ def rewrite_block(i, p, args, concepts, lang, report):
             note(report, f"{i} (part {j})", run, text, fallback, lost, lang, fmt)
             out.append(text)
         done = sum(t != r for t, r in zip(out, runs))
+        report.setdefault("parts", {})[str(i)] = {"source": runs, "text": out}
+        for j, run in enumerate(runs, 1):
+            print(f"  paragraph {i}, part {j}: «{' '.join(run.split()[:7])}…»"
+                  + ("" if out[j - 1] != run else " (kept as the original)"), flush=True)
         return ("\n" if fmt == "latex" else " ").join(out), \
             f"one paragraph in {len(runs)} parts, {done} rewritten"
     note(report, str(i), p, text, fallback, lost, lang, fmt)
@@ -615,13 +629,51 @@ def rewrite_block(i, p, args, concepts, lang, report):
     return text, status
 
 
+def redo_part(i, current, entry, args, concepts, lang, report):
+    """(paragraph i with only part K regenerated, status), or (None, None) after saying
+    why. The other parts keep their text and any hand fix made in them since."""
+    k = args.part
+    if not entry:
+        print(f"ERROR: paragraph {i} was not rewritten in parts (nothing in "
+              f"{args.output}.parts.json); redo the whole paragraph with --only {i}",
+              file=sys.stderr)
+        return None, None
+    if not 1 <= k <= len(entry["source"]):
+        print(f"ERROR: paragraph {i} has parts 1 to {len(entry['source'])}", file=sys.stderr)
+        return None, None
+    old = entry["text"][k - 1]
+    if old not in current:
+        print(f"ERROR: part {k} of paragraph {i} was changed by hand since it was written; "
+              "undo that fix (it is being redone anyway) and run it again", file=sys.stderr)
+        return None, None
+    run = entry["source"][k - 1]
+    text, n, fallback, lost = rewrite_unit(run, args, concepts, lang, args.lead if k == 1 else None)
+    note(report, f"{i} (part {k})", run, text, fallback, lost, lang, getattr(args, "fmt", "text"))
+    entry["text"][k - 1] = text
+    report.setdefault("parts", {})[str(i)] = entry
+    return current.replace(old, text, 1), f"part {k} of {len(entry['source'])} redone ({n} tries)"
+
+
 def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
     output, t0 = [], time.time()
     fmt = getattr(args, "fmt", "text")
     report = {"untouched": [], "copied": [], "tells": [], "numbers": [], "symbols": []}
+    sidecar = args.output + ".parts.json"
+    try:
+        with open(sidecar, encoding="utf-8") as fh:
+            saved = json.load(fh)
+    except (OSError, ValueError):
+        saved = {}
     for i, p in enumerate(paragraphs, 1):
         if kept is not None and i not in only:
             output.append(kept[i - 1])
+            continue
+        if getattr(args, "part", None) is not None:
+            text, status = redo_part(i, kept[i - 1], saved.get(str(i)), args, concepts, lang, report)
+            if text is None:
+                return 2
+            output.append(text)
+            print(f"Paragraph {i}: {status}", flush=True)
             continue
         if args.candidates:
             if blocks.kind(p, fmt) in blocks.PROSE and not is_title(p):
@@ -631,11 +683,21 @@ def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
             output.append(kept[i - 1])
             continue
         text, status = rewrite_block(i, p, args, concepts, lang, report)
+        if str(i) not in report.get("parts", {}):
+            saved.pop(str(i), None)  # rewritten whole: its old parts no longer apply
         output.append(text)
         with open(args.output, "w", encoding="utf-8") as fh:  # saves after every paragraph
             fh.write(blocks.unparse(frame, output + (kept or paragraphs)[i:]))
         print(f"Paragraph {i} of {len(paragraphs)}: {status} ({time.time() - t0:.0f} s)", flush=True)
 
+    if report.get("parts"):
+        saved.update(report["parts"])
+    if saved:
+        with open(sidecar, "w", encoding="utf-8") as fh:
+            json.dump(saved, fh, ensure_ascii=False, indent=1)
+    if getattr(args, "part", None) is not None:
+        with open(args.output, "w", encoding="utf-8") as fh:
+            fh.write(blocks.unparse(frame, output))
     if args.candidates:
         print(f"\nCandidates in {args.output}.candidates/ — the output was not changed. Measure them\n"
               "joined and inside the whole text, then adopt one with --take N=FILE.")
