@@ -300,6 +300,13 @@ párrafo; nunca lo partas a mano (`check.py` falla si cambia el número de párr
 
 No le pidas a ChatGPT que lo corrija: le devuelve la huella que el modelo base quitó.
 
+**Opcional, solo en inglés: limpiar los patrones de IA antes.** `scripts/clean.py` deja que
+el agente edite solo las frases con patrones de IA (`references/slop-patterns.md`) antes de
+que reescriba el modelo base, y no escribe nada si cambió una cifra, un concepto, una cita o
+un marcador de LaTeX, o si se editó más de la mitad de un párrafo o un tercio del texto. No
+está medido; `references/detectors.md` tiene la prueba A/B. Los textos en español van
+directo al modelo base.
+
 **4. Reconstruye el ritmo** (el idioma se detecta solo):
 
 ```bash
@@ -412,7 +419,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 129 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 135 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -458,6 +465,7 @@ humanizar-es/
 │   ├── install_model.py     baja el modelo (una vez)
 │   ├── rewrite.py           etapas 1, 2 y 4: reescribe, cuida la fidelidad, candidatos
 │   ├── check.py             etapa 2: conceptos y negaciones, original contra reescritura
+│   ├── clean.py             paso 4a opcional (inglés): quitar patrones de IA antes, vigilado
 │   ├── tells.py             etapas 2 y 4: frases hechas de IA por párrafo, qué regenerar
 │   ├── blocks.py            párrafos y bloques de Markdown (código, tablas, listas), compartido
 │   ├── latex.py             artículos en LaTeX: la prosa, y marcadores para fórmulas y comandos
@@ -465,7 +473,7 @@ humanizar-es/
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   129 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   135 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,

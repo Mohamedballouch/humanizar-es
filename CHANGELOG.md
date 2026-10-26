@@ -1,5 +1,25 @@
 # Changelog
 
+## 5.4.0 — October 26, 2026
+
+**Optional step 4a: clean the slop before the base model (English, on request).**
+
+- `scripts/clean.py export` puts the prose in a work file (LaTeX as placeholders); the agent
+  edits only the sentences that carry an AI pattern; `clean.py import` is the gate. It writes
+  `00-clean` only if no figure (sign included), concept, quotation, reference, link or LaTeX
+  placeholder changed, and at most half of any paragraph's words and a third of the whole
+  text's were edited; otherwise it writes nothing and lists the problems and the changed
+  sentences. It reports the tells score before and after.
+- `references/slop-patterns.md`: the 26 patterns of blader/humanizer (MIT) in our own words,
+  with this step's rules on top: only the slop, the paragraphs kept, papers keep their passive
+  voice and hedges.
+- Step 5 then rewrites `00-clean`; steps 6 and 8 still check against `00-original`.
+- `references/detectors.md`: the A/B test (with and without the cleanup, on the same text and
+  day, with both controls) that decides whether the step becomes the default. Until then the
+  default is the measured pipeline.
+- `rewrite.py`'s warning for a paragraph kept as the original no longer blames a concept's
+  spelling when no concept was lost.
+
 ## 5.3.0 — October 24, 2026
 
 Found by running the whole pipeline (rewrite, check, join, check, PDF) on two abstracts and

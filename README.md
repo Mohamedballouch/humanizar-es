@@ -297,6 +297,21 @@ paragraphs by hand (`check.py` fails when the number of paragraphs changes).
 
 Don't ask ChatGPT to fix it: it puts back the fingerprint the base model removed.
 
+**Optional, English only: clean the slop first.** Ask your agent to "clean it first" and it
+edits only the sentences with AI patterns (`references/slop-patterns.md`, from
+[blader/humanizer](https://github.com/blader/humanizer)) before the base model rewrites.
+`clean.py import` is the gate: nothing is written if a figure, concept, quotation or LaTeX
+placeholder changed, or if more than half of a paragraph or a third of the text was edited.
+It is not measured yet; `references/detectors.md` has the A/B test that decides whether it
+becomes the default.
+
+```bash
+python3 scripts/clean.py export my-text.txt -o 00-slop.txt     # edit the slop in this file
+python3 scripts/clean.py import my-text.txt 00-slop.txt -o 00-clean.txt --concepts concepts.txt
+python3 scripts/rewrite.py 00-clean.txt -o rewritten.txt --concepts concepts.txt
+python3 scripts/check.py my-text.txt rewritten.txt --concepts concepts.txt   # against the original
+```
+
 **4. Rebuild the rhythm** (the language is detected automatically):
 
 ```bash
@@ -408,7 +423,7 @@ No. It changes who wrote the sentences and their rhythm, not the spelling.
 Three of four essays reached 0% in Grammarly, and the latest one passes Grammarly, GPTZero
 and ZeroGPT at once. The pieces that can be deterministic are (the joining is seeded;
 ZeroGPT gives the same score for the same text), output that copies the original is
-refused, and 129 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
+refused, and 135 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
 over time, which is why every session carries controls.
 
 **Does the selection step send my text anywhere?**
@@ -453,6 +468,7 @@ humanizar-es/
 │   ├── install_model.py     downloads the model (once)
 │   ├── rewrite.py           stages 1, 2 and 4: rewrite, guard fidelity, candidates
 │   ├── check.py             stage 2: concepts and negations, original vs rewrite
+│   ├── clean.py             optional step 4a: the slop edited out first, through a gate
 │   ├── tells.py             stages 2 and 4: stock AI phrases per paragraph, what to regenerate
 │   ├── blocks.py            paragraphs and Markdown blocks (code, tables, lists), shared
 │   ├── latex.py             LaTeX papers: the prose, and placeholders for math and commands
@@ -460,7 +476,7 @@ humanizar-es/
 │   └── join.py              stage 3: rebuild the rhythm of each paragraph
 ├── examples/                worked examples in Spanish and English
 ├── references/              every measurement, and how to measure
-└── tests/                   129 tests on Ubuntu, macOS and Windows (no network, no model)
+└── tests/                   135 tests on Ubuntu, macOS and Windows (no network, no model)
 ```
 
 The old script names (`hip.py`, `unir.py`, `verificar_fidelidad.py`, `instalar_hip.py`)

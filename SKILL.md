@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "5.3.0"
+  version: "5.4.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -80,7 +80,9 @@ To start: `python3 <skill>/scripts/check.py 00-original.txt --list`
 
 1. **Detectors recognize the fingerprint of chat training.** Everything a chat model
    writes carries it, **including you**. So never rewrite the text yourself
-   or "improve" sentences: every sentence you write puts the fingerprint back. `rewrite.py` does the
+   or "improve" sentences: every sentence you write puts the fingerprint back. (The one
+   exception is step 4a, on request: you edit the slop out *before* the base model, which
+   then rewrites every sentence, yours included.) `rewrite.py` does the
    rewriting with a **base** model (no chat training).
 2. **Grammarly recognizes rhythm**: sentences of even length, each with its own period.
    `join.py` rebuilds it in blocks of uneven length, the way people write.
@@ -129,6 +131,33 @@ fails here with its error; if something is missing, it says so.
    terminal. If the download is cut, run it again: it resumes.
 
 Python 3.9+ is enough: the scripts need no packages.
+
+### 4a. Clean the slop first (only on request, English only)
+
+Run this step only when the user asks for it ("clean it first", "remove the AI slop before
+the model"). It is **not measured**: say so, and suggest the A/B test in
+`references/detectors.md` so they find out whether it helps. For a Spanish text, say it is
+English only and go on to step 5.
+
+```bash
+python3 <skill>/scripts/clean.py export 00-original.txt -o 00-slop.txt
+```
+
+Edit `00-slop.txt` following `references/slop-patterns.md`: change **only the sentences
+that carry a pattern** (stock phrases, "not just… but", inflated significance, filler
+openers, dashes everywhere, chatbot residue…) and leave every other sentence word for word.
+Keep the `=== n ===` lines, every figure, term, negation, quotation and LaTeX placeholder, and
+the paragraphs as they are. Then the gate:
+
+```bash
+python3 <skill>/scripts/clean.py import 00-original.txt 00-slop.txt -o 00-clean.txt --concepts concepts.txt
+```
+
+It writes `00-clean.txt` only if nothing changed but slop: no figure lost or added, no concept
+lost, quotations and placeholders intact, at most half of any paragraph's words and a third of
+the whole text's edited. Otherwise it writes nothing and lists the problems and the sentences
+you changed: narrow the edits and import again. Then **step 5 rewrites `00-clean.txt`**
+instead of the original, and steps 6 and 8 still compare against `00-original.txt`.
 
 ### 5. Rewrite with the local model
 
@@ -308,7 +337,8 @@ python3 <skill>/scripts/join.py 01-rewritten.txt -o 02-final.txt --concepts conc
 ## Don't
 
 - **Rewrite it yourself, "humanize" it in your own words, or ask another chat model.**
-  That adds the fingerprint this recipe removes.
+  That adds the fingerprint this recipe removes. Step 4a edits only the slop, only before
+  the base model, and only when the user asks; never after it.
 - **Add typos, remove commas or add double spaces.** Not needed: double spaces moved
   nothing (84% → 84%), and joining sentences lowered the score more than any error.
 - **Change the paragraphs.** A journal or conference abstract is one paragraph and stays
@@ -351,11 +381,13 @@ risk before proceeding.
 - `scripts/rewrite.py` — steps 5, 6 and 9: rewrite with the local base model, guard
   fidelity, `--only`, `--candidates`, `--lead`, `--take`
 - `scripts/join.py` — step 7: rebuild the rhythm of each paragraph (`--only`)
+- `scripts/clean.py` — step 4a: the cleanup work file out, and back in through the gate
 - `scripts/check.py` — concepts, negations and figures (counted), original against version
 - `scripts/latex.py` — LaTeX papers: what is prose, placeholders for math and commands
 - `scripts/convert.py` — PDF to text, text to PDF, LaTeX to PDF
 - `scripts/blocks.py` — paragraphs and Markdown blocks (code, tables, lists), shared by all
 - `scripts/tells.py` — steps 6 and 9: tells of AI writing per paragraph, what to regenerate
 - `references/evidence.md` — every measurement
+- `references/slop-patterns.md` — step 4a: the 26 patterns to edit out, and the rules
 - `references/detectors.md` — how to measure in Grammarly, GPTZero, ZeroGPT and Originality.ai, with controls
 - `examples/` — worked examples in English and Spanish, and a LaTeX paper with its PDF

@@ -642,9 +642,9 @@ def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
         return 0
     print(f"\nWritten: {args.output}")
     if report["untouched"]:
-        print("WARNING: kept as the original, the concept they kept losing in brackets: "
-              + "; ".join(report["untouched"]) + ". Check the spelling of that concept in the "
-              "concepts file.")
+        print("WARNING: kept as the original, why in brackets: " + "; ".join(report["untouched"])
+              + ". A concept named there: check its spelling in the concepts file. Otherwise, "
+              "redo it with --only and more --tries.")
     if report["copied"]:
         print("WARNING: every try copied long stretches of the original; the least copied one "
               "was kept: " + "; ".join(report["copied"]) + ". Redo them with --only and more "

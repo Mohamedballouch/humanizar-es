@@ -1365,6 +1365,100 @@ class Convert(unittest.TestCase):
             self.assertIn("goes to text first", r.stderr)
 
 
+class Clean(unittest.TestCase):
+    """Step 4a: the agent edits the slop out of a work file; import is the gate."""
+    SLOP = ("Moreover, our framework plays a crucial role in the evolving landscape of microgrid "
+            "control. It is not just a scheduler, but a testament to what reinforcement learning "
+            "can achieve. Profit rose by 5.7% at B = 3, with a 95% CI of -0.7 to +2.8.")
+    PLAIN = ("The supervisor reads the scored history and proposes a directive for the day. The "
+             "agents follow it until an event notice arrives, and then the supervisor is called "
+             "again with the new state of the plant.")
+    GOOD = ("Our framework controls a microgrid. It schedules the plant, and shows what "
+            "reinforcement learning can do there. Profit rose by 5.7% at B = 3, with a 95% CI "
+            "of -0.7 to +2.8.")
+
+    def _run(self, original, edits, ext=".txt", concepts="microgrid\nreinforcement learning\n"):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        src, work, out, conc = (os.path.join(tmp, n) for n in
+                                ("00-original" + ext, "00-slop.txt", "00-clean" + ext, "c.txt"))
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(original)
+        with open(conc, "w", encoding="utf-8") as fh:
+            fh.write(concepts)
+        r = run(sys.executable, script("clean.py"), "export", src, "-o", work)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        text = read(work)
+        for old, new in edits:
+            self.assertIn(old, text)
+            text = text.replace(old, new)
+        with open(work, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        r = run(sys.executable, script("clean.py"), "import", src, work, "-o", out, "--concepts", conc)
+        return r, (read(out) if os.path.exists(out) else None)
+
+    def test_a_cleanup_of_the_slop_passes_and_keeps_the_rest(self):
+        original = "# Results\n\n" + self.SLOP + "\n\n" + self.PLAIN + "\n"
+        r, out = self._run(original, [(self.SLOP, self.GOOD)])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(out, "# Results\n\n" + self.GOOD + "\n\n" + self.PLAIN + "\n")
+        self.assertIn("tells score", r.stdout)
+        self.assertIn("2: Our framework controls a microgrid.", r.stdout)
+
+    def test_a_dropped_minus_or_lost_concept_writes_nothing(self):
+        original = self.SLOP + "\n\n" + self.PLAIN + "\n"
+        r, out = self._run(original, [(self.SLOP, self.GOOD.replace("-0.7", "0.7"))])
+        self.assertEqual(r.returncode, 1)
+        self.assertIsNone(out)
+        self.assertIn("lost -0.7", r.stdout)
+        r, out = self._run(original, [(self.SLOP, self.GOOD.replace("a microgrid", "the plant"))])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("concept lost: microgrid", r.stdout)
+
+    def test_a_rewrite_is_not_a_cleanup(self):
+        original = self.SLOP + "\n\n" + self.PLAIN + "\n"
+        rewritten = ("A microgrid needs control, and ours does it with reinforcement learning, "
+                     "which pays: at B = 3 profit went up 5.7% (95% CI -0.7 to +2.8).")
+        r, out = self._run(original, [(self.SLOP, rewritten)])
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("only the slop, at most 50%", r.stdout)
+        self.assertIsNone(out)
+
+    def test_the_whole_text_has_a_limit_too(self):
+        a = ("The plant runs every hour. The supervisor picks a directive. Profit rose by 5.7% "
+             "in the microgrid test.")
+        b = ("Each hour the plant runs. A directive is picked by the supervisor. In the "
+             "microgrid test profit went up by 5.7%.")
+        r, out = self._run(a + "\n", [(a, b)], concepts="microgrid\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+
+    def test_latex_placeholders_must_stay(self):
+        tex = ("\\documentclass{article}\n\\begin{document}\n"
+               "Moreover, the method plays a crucial role in microgrid control~\\cite{a}, with "
+               "$p = 0.24$ and a gain that we measured on every one of the thirty teams.\n"
+               "\\end{document}\n")
+        r, out = self._run(tex, [("Moreover, the method plays a crucial role in", "The method matters for")],
+                           ext=".tex", concepts="microgrid\n")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("The method matters for microgrid control~\\cite{a}", out)
+        self.assertIn("$p = 0.24$", out)
+        self.assertTrue(out.startswith("\\documentclass{article}"))
+        r, out = self._run(tex, [("control [1]", "control")], ext=".tex", concepts="microgrid\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIsNone(out)
+
+    def test_spanish_is_left_to_the_base_model(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        src = os.path.join(tmp, "es.txt")
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write("Además, el marco juega un papel crucial en el control de la microrred y "
+                     "de la planta, que es lo que el estudio quiere mostrar.\n")
+        r = run(sys.executable, script("clean.py"), "export", src, "-o", os.path.join(tmp, "w.txt"))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("for English text", r.stderr)
+
+
 class ModelDir(unittest.TestCase):
     def _put_model(self, directory):
         os.makedirs(directory, exist_ok=True)
