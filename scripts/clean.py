@@ -73,9 +73,13 @@ def changed_share(before, after):
 
 
 def changed_sentences(before, after):
-    """The sentences of `after` that are not sentences of `before`."""
-    old = set(rewrite.SENTENCE_END.split(" ".join(before.split())))
-    return [s for s in rewrite.SENTENCE_END.split(" ".join(after.split())) if s not in old]
+    """[(original sentences, their replacement)] for what a cleanup changed, so a reader
+    can check each edit against what it replaced: no check sees «addressing» -> «solved»."""
+    a = rewrite.SENTENCE_END.split(" ".join(before.split()))
+    b = rewrite.SENTENCE_END.split(" ".join(after.split()))
+    sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    return [(" ".join(a[i1:i2]), " ".join(b[j1:j2]))
+            for tag, i1, i2, j1, j2 in sm.get_opcodes() if tag != "equal"]
 
 
 def guard(original, new, fmt, concepts):
@@ -197,10 +201,10 @@ def do_import(args):
         problems.append(f"the whole text: {total:.0%} of its words edited; only the slop, at "
                         f"most {MAX_TOTAL:.0%}")
     if edited:
-        print("Sentences changed:")
-        for uid, sentences in edited:
-            for s in sentences:
-                print(f"  {uid}: {s}")
+        print("Changed (read each pair: the same claim, no stronger, no weaker?):")
+        for uid, pairs in edited:
+            for old, new in pairs:
+                print(f"  {uid}  - {old or '(nothing)'}\n  {' ' * len(uid)}  + {new or '(removed)'}")
     if problems:
         print("NOT written (narrow the edits in the work file and import again):\n  "
               + "\n  ".join(problems))
@@ -221,7 +225,7 @@ def do_import(args):
     before, after = score(paragraphs), score(out)
     print(f"Written: {args.output} ({len(edited)} of {len(found)} units edited, {total:.0%} of "
           f"the words; tells score {before} -> {after})")
-    if after >= before and edited:
+    if edited and 0 < before <= after:
         print("WARNING: the tells score did not drop: check the edits removed the patterns.")
     return 0
 

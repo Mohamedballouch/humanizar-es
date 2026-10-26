@@ -1,5 +1,17 @@
 # Changelog
 
+## 5.4.1 — October 26, 2026
+
+From cleaning two real AI texts by hand through the gate (the English example essay: 20% of
+its words edited, tells 29 -> 5, passed; the microgrid abstract: 10%, passed):
+
+- `clean.py import` prints each changed sentence beside the one it replaced. The test cleanup
+  turned «played a crucial role in addressing» into «solved» and dropped an «often»: both
+  pass every check, and only reading the pair shows them. SKILL.md asks for that reading.
+- The «tells score did not drop» warning no longer fires when the original scored 0: the
+  abstract's slop («makes important contributions to the continuing debates», «specifically
+  utilizing») is the kind `tells.py` does not count.
+
 ## 5.4.0 — October 26, 2026
 
 **Optional step 4a: clean the slop before the base model (English, on request).**

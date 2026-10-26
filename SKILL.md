@@ -2,7 +2,7 @@
 name: humanize-research
 description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "5.4.0"
+  version: "5.4.1"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -155,8 +155,10 @@ python3 <skill>/scripts/clean.py import 00-original.txt 00-slop.txt -o 00-clean.
 
 It writes `00-clean.txt` only if nothing changed but slop: no figure lost or added, no concept
 lost, quotations and placeholders intact, at most half of any paragraph's words and a third of
-the whole text's edited. Otherwise it writes nothing and lists the problems and the sentences
-you changed: narrow the edits and import again. Then **step 5 rewrites `00-clean.txt`**
+the whole text's edited. Otherwise it writes nothing and lists the problems. Either way it prints each sentence
+you changed beside the one it replaced: **read every pair** for a claim made stronger or
+weaker («addressing» -> «solved», a dropped «often»), which no check can see, and put the
+original's strength back. Narrow the edits and import again. Then **step 5 rewrites `00-clean.txt`**
 instead of the original, and steps 6 and 8 still compare against `00-original.txt`.
 
 ### 5. Rewrite with the local model

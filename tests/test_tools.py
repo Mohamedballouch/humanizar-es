@@ -31,6 +31,7 @@ CAN_READ_PDF = bool(shutil.which("pdftotext"))
 
 sys.path.insert(0, SCRIPTS)
 import blocks  # noqa: E402
+import clean  # noqa: E402
 import check  # noqa: E402
 import convert  # noqa: E402
 import join  # noqa: E402
@@ -1403,7 +1404,9 @@ class Clean(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(out, "# Results\n\n" + self.GOOD + "\n\n" + self.PLAIN + "\n")
         self.assertIn("tells score", r.stdout)
-        self.assertIn("2: Our framework controls a microgrid.", r.stdout)
+        self.assertIn("2  - Moreover, our framework plays a crucial role", r.stdout)
+        self.assertIn("+ Our framework controls a microgrid. It schedules", r.stdout)
+        self.assertEqual(clean.changed_sentences("A b. C d. E f.", "A b. X y. E f."), [("C d.", "X y.")])
 
     def test_a_dropped_minus_or_lost_concept_writes_nothing(self):
         original = self.SLOP + "\n\n" + self.PLAIN + "\n"
