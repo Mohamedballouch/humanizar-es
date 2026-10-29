@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocks  # noqa: E402
 import check  # noqa: E402
 import latex  # noqa: E402
+import word  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on «» or ñ
     sys.stdout.reconfigure(errors="replace")
@@ -282,32 +283,58 @@ def join_with_pauses(paragraph, proper, pauses, rnd, doubtful=None, lang="es"):
     return " ".join(blocks)
 
 
+# A footnote or citation placeholder right after a full stop («batch.[3] Moreover») hides the
+# sentence end from the joins; it moves before the stop while joining, and back after it in
+# the sentences that still end there. Only the moved ones: an IEEE «[12].» stays as written.
+AFTER_STOP = re.compile(r"\.((?:\[\d+\])+)(?= |$)")
+
+
+def markers_before_period(text):
+    moved = set(AFTER_STOP.findall(text))
+    return AFTER_STOP.sub(lambda m: m.group(1) + ".", text), moved
+
+
+def markers_after_period(text, moved):
+    if not moved:
+        return text
+    return re.sub(r"((?:\[\d+\])+)\.(?= |$)",
+                  lambda m: "." + m.group(1) if m.group(1) in moved else m.group(0), text)
+
+
 def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, lang=None,
-              pauses=None, no_dashes=False, fmt="text", only=None):
+              pauses=None, no_dashes=False, fmt="text", only=None, words_per_period=None):
     """doubtful: if it is a list, it receives the words that were lowercased without
     appearing that way anywhere else in the text (possible proper nouns).
     lang: "es", "en" or None to detect it. no_dashes: dashes between words become commas.
     fmt: "text" (plain text or Markdown) or "latex". only: the paragraph numbers to join
-    (a set), leaving the rest as they are; None joins them all."""
+    (a set), leaving the rest as they are; None joins them all. words_per_period: with
+    pauses, a long paragraph keeps more periods, about one per that many words (a 300-word
+    abstract with --pauses 2 alone came out with a 150-word sentence)."""
     frame, paragraphs = blocks.parse(text, fmt)
     lang = lang or detect_language(" ".join(blocks.prose_of(x, fmt) for x in paragraphs))
     c = LANGUAGES[lang]
     rnd = random.Random(seed)
-    proper = proper_nouns(latex.plain(text) if fmt == "latex" else text, concepts, lang)
+    source = blocks.plain(text, fmt)
+    proper = proper_nouns(source, concepts, lang)
     lowered = []
 
     def prose(x):
         x = replace_dashes(x) if no_dashes else x
+        x, moved = markers_before_period(x)
         if pauses:
-            return join_with_pauses(x, proper, pauses, rnd, lowered, lang)
-        return join_paragraph(x, proper, p, rnd, max_words, lowered, lang)
+            n = pauses
+            if words_per_period:
+                n = max(pauses, round(len(x.split()) / words_per_period) - 1)
+            return markers_after_period(join_with_pauses(x, proper, n, rnd, lowered, lang), moved)
+        return markers_after_period(join_paragraph(x, proper, p, rnd, max_words, lowered, lang), moved)
 
     def one(x):
-        if fmt != "latex":
+        if fmt not in ("latex", "docx"):
             return prose(x)
-        visible, pieces = latex.protect(x)
+        codec = latex if fmt == "latex" else word  # placeholders in, the same pieces back
+        visible, pieces = codec.protect(x)
         joined = prose(visible)
-        return x if joined == visible else (latex.restore(joined, pieces) or x)
+        return x if joined == visible else (codec.restore(joined, pieces) or x)
 
     out = []
     for n, x in enumerate(paragraphs, 1):
@@ -322,7 +349,7 @@ def join_text(text, concepts=(), p=1.0, seed=7, max_words=400, doubtful=None, la
             out.append(one(x) if k == "prose" else x)
     output = blocks.unparse(frame, out)
     if doubtful is not None:
-        words = set(re.findall(r"\w+", text))
+        words = set(re.findall(r"\w+", source))
         doubtful.extend(sorted({w for w in lowered if w.lower() not in words
                                 and w not in c["common"] | c["no_warn"]}))
     return output
@@ -343,6 +370,9 @@ def main():
     ap.add_argument("--pauses", "--pausas", dest="pauses", type=int,
                     help="leave this many periods per paragraph (2 or 3) in blocks of uneven "
                     "length, instead of joining everything; reads better")
+    ap.add_argument("--words-per-period", dest="words_per_period", type=int, metavar="N",
+                    help="with --pauses: a long paragraph keeps about one period per N words "
+                         "(try 55 for an abstract); not measured against detectors yet")
     ap.add_argument("--only", help="join only these paragraphs (e.g. 4,7), the numbers rewrite.py "
                     "--only uses; the rest stay as they are")
     ap.add_argument("--no-dashes", "--sin-rayas", dest="no_dashes", action="store_true",
@@ -350,8 +380,7 @@ def main():
                     "whose author does not use them")
     args = ap.parse_args()
 
-    with open(args.input, encoding="utf-8-sig") as fh:
-        text = fh.read()
+    text = blocks.read(args.input)
     concepts = check.load_concepts(args.concepts) if args.concepts else []
     doubtful = []
     fmt = blocks.format_of(args.input)
@@ -364,10 +393,9 @@ def main():
         return 2
     joined = join_text(text, concepts, args.ratio, max_words=args.max_words, doubtful=doubtful,
                        lang=lang, pauses=args.pauses, no_dashes=args.no_dashes, fmt=fmt,
-                       only=only)
-    with open(args.output, "w", encoding="utf-8") as fh:
-        fh.write(joined)
-    count = lambda t: len(re.findall(r"[.!?](?:\s|$)", t))  # noqa: E731
+                       only=only, words_per_period=args.words_per_period)
+    blocks.write(args.output, joined, args.input)
+    count = lambda t: len(re.findall(r"[.!?](?:\s|$)", blocks.plain(t, fmt)))  # noqa: E731
     print(f"Written: {args.output} ({count(text)} sentences -> {count(joined)}, language: {lang})")
     if doubtful:
         print("REVIEW: these were lowercased and do not appear that way in the text; if they "

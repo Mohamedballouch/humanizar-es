@@ -5,6 +5,7 @@ the file extensions:
   convert.py paper.pdf -o 00-original.md    PDF -> text the pipeline can read (Markdown)
   convert.py 02-final.md -o 02-final.pdf    text or Markdown -> PDF, through LaTeX
   convert.py 02-final.tex -o 02-final.pdf   your LaTeX paper -> PDF (figures, .bib and all)
+  convert.py 02-final.docx -o 02-final.pdf  your Word file -> PDF, in its own layout
 
 A paper's LaTeX source is always the better input: rewrite.py and join.py read .tex
 directly and keep the equations, tables, citations and layout byte for byte. A PDF only
@@ -19,10 +20,12 @@ Reading a PDF needs pdftotext (poppler: `brew install poppler`, `apt install
 poppler-utils`, or on Windows `winget install oschwartz10612.Poppler`) or the pypdf package.
 Making a PDF needs a LaTeX engine: tectonic, latexmk, pdflatex, xelatex or lualatex (TeX
 Live, MacTeX or MiKTeX). Without one the .tex is still written: upload it to Overleaf.
+A Word file is made into a PDF by LibreOffice (soffice); without it, save it as PDF from Word.
 """
 import argparse
 import collections
 import os
+import pathlib
 import re
 import shutil
 import subprocess
@@ -436,6 +439,44 @@ def compile_tex(tex_path, pdf_path, name=None):
     return None
 
 
+def office():
+    """LibreOffice's soffice, on the PATH or where its installers put it, or None."""
+    for name in ("soffice", "libreoffice"):
+        if shutil.which(name):
+            return shutil.which(name)
+    for path in ("/Applications/LibreOffice.app/Contents/MacOS/soffice",
+                 os.path.join(os.environ.get("PROGRAMFILES", r"C:\Program Files"), "LibreOffice",
+                              "program", "soffice.exe")):
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def docx_to_pdf(docx_path, pdf_path):
+    """The Word file as a PDF, in its own layout, made by LibreOffice. Returns None, or the
+    error to show."""
+    soffice = office()
+    if not soffice:
+        return ("LibreOffice is not installed (brew install --cask libreoffice, apt install "
+                "libreoffice-writer, winget install TheDocumentFoundation.LibreOffice); or open "
+                f"{docx_path} in Word and save it as PDF.")
+    with tempfile.TemporaryDirectory() as out:
+        # a profile of its own, so a LibreOffice already open does not take the job and drop it
+        profile = pathlib.Path(out, "profile").as_uri()
+        try:
+            r = subprocess.run([soffice, f"-env:UserInstallation={profile}", "--headless",
+                                "--convert-to", "pdf", "--outdir", out, os.path.abspath(docx_path)],
+                               capture_output=True, stdin=subprocess.DEVNULL, timeout=600)
+        except subprocess.TimeoutExpired:
+            return f"LibreOffice took more than 10 minutes on {docx_path}"
+        pdf = os.path.join(out, os.path.splitext(os.path.basename(docx_path))[0] + ".pdf")
+        if r.returncode != 0 or not os.path.isfile(pdf):
+            said = (r.stderr or r.stdout).decode("utf-8", "replace").strip()
+            return f"LibreOffice could not convert {docx_path}: {said[-500:]}"
+        shutil.copyfile(pdf, pdf_path)
+    return None
+
+
 def figures_missing_from_pdf(text, pdf_path):
     """Figures of the text that the PDF does not print, read back from the PDF itself;
     [] when there is nothing to read it with. The PDF may add some (page numbers)."""
@@ -451,7 +492,7 @@ def figures_missing_from_pdf(text, pdf_path):
 # ---------------------------------------------------------------- CLI
 
 def main():
-    ap = argparse.ArgumentParser(description="PDF -> text, text -> PDF, LaTeX -> PDF.")
+    ap = argparse.ArgumentParser(description="PDF -> text, text -> PDF, LaTeX -> PDF, Word -> PDF.")
     ap.add_argument("input")
     ap.add_argument("-o", "--output", required=True)
     ap.add_argument("--engine", choices=("tectonic", "latexmk", "pdflatex", "xelatex", "lualatex"),
@@ -497,9 +538,21 @@ def main():
         return 0
 
     if dst != ".pdf":
-        print("ERROR: convert.py makes text from a .pdf, or a .pdf from .md, .txt or .tex",
+        print("ERROR: convert.py makes text from a .pdf, or a .pdf from .md, .txt, .tex or .docx",
               file=sys.stderr)
         return 2
+    if src == ".docx":
+        problem = docx_to_pdf(args.input, args.output)
+        if problem:
+            print(f"ERROR: {problem}", file=sys.stderr)
+            return 2
+        lost = figures_missing_from_pdf(blocks.plain(blocks.read(args.input), "docx"), args.output)
+        if lost:
+            print("WARNING: these figures of the Word file are not in the PDF: " + ", ".join(lost),
+                  file=sys.stderr)
+            return 1
+        print(f"Written: {args.output}")
+        return 0
     name = args.engine or engine()
     if src == ".tex":
         problem = compile_tex(args.input, args.output, name)

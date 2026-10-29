@@ -14,6 +14,9 @@ Already have Qwen3-4B-Base? Point HUMANIZE_BASE_MODEL at its .gguf (any quantiza
 only the 280 MB adapter is downloaded, and the file is checked to be Qwen3-4B. A model in
 Hugging Face format (safetensors) becomes a .gguf with llama.cpp's convert_hf_to_gguf.py.
 
+A bigger model: HUMANIZE_BASE_MODEL a .gguf of Qwen3-8B-Base (say) and HUMANIZE_ADAPTER the
+adapter trained for it, in GGUF (nothing is downloaded; the README says how to make it).
+
 Destination: $HUMANIZE_MODEL_DIR or ~/.cache/humanizar-es/hip. If the
 files are already there, it only verifies them. If it gets cut off, run it again: it
 resumes where it stopped. It checks the free space first. Where huggingface.co is
@@ -129,7 +132,7 @@ def download(name, url, sha, tries=3):
 GGUF_TYPES = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",
               10: "<Q", 11: "<q", 12: "<d"}
 WANTED = ("general.architecture", "general.name", "general.basename", "general.finetune",
-          "general.size_label", "qwen3.embedding_length", "qwen3.block_count")
+          "general.size_label", "qwen3.embedding_length", "qwen3.block_count", "adapter.type")
 
 
 def gguf_info(path):
@@ -168,32 +171,50 @@ def gguf_info(path):
     return info
 
 
-def check_base(path):
-    """(problem, warning) about a base model the user brings: the adapter needs Qwen3-4B,
-    and the method needs the base model, not the chat one."""
+def check_adapter(path):
+    """(problem, architecture) of an adapter the user brings: a LoRA in GGUF."""
+    try:
+        info = gguf_info(path)
+    except (OSError, ValueError, struct.error, KeyError) as e:
+        return f"{path} could not be read as a GGUF file ({e})", None
+    if info.get("adapter.type") != "lora":
+        return (f"{path} is not a LoRA adapter in GGUF. Convert the adapter's safetensors with "
+                "llama.cpp's convert_lora_to_gguf.py (see the README)."), None
+    return None, info.get("general.architecture")
+
+
+def check_base(path, adapter_arch=None):
+    """(problem, warning) about a base model the user brings. Without an adapter of their own
+    the HIP adapter needs Qwen3-4B; with one (adapter_arch is its architecture) the model must
+    be the one it was trained on, which llama.cpp checks when it loads them. The method needs
+    the base model, not the chat one."""
     try:
         info = gguf_info(path)
     except (OSError, ValueError, struct.error, KeyError) as e:
         return f"{path} could not be read as a GGUF model ({e})", None
     arch, width = info.get("general.architecture"), info.get("qwen3.embedding_length")
-    if arch != "qwen3" or (width and width != 2560):
+    if adapter_arch:
+        if arch != adapter_arch:
+            return f"{path} is {arch or 'an unknown architecture'}, and your adapter is {adapter_arch}.", None
+    elif arch != "qwen3" or (width and width != 2560):
         return (f"{path} is {arch or 'an unknown architecture'}"
                 + (f" with width {width}" if width else "")
                 + "; the HIP adapter needs Qwen3-4B (qwen3, width 2560)."), None
     label = " ".join(str(info.get(k, "")) for k in ("general.name", "general.basename",
                                                      "general.finetune")).lower()
-    if "base" not in label:
+    chat = "instruct" in label or "chat" in label or (arch == "qwen3" and "base" not in label)
+    if chat:
         return None, (f"{path} calls itself «{info.get('general.name', '?')}», not a base model. "
-                      "If it is Qwen3-4B, the chat model, detectors will see its chat training: "
-                      "the method needs Qwen3-4B-Base.")
+                      "A chat model's training is what detectors recognize: the method needs the "
+                      "base model (Qwen3-8B-Base, not Qwen3-8B).")
     return None, None
 
 
-def bytes_missing(folder, own_base=False):
+def bytes_missing(folder, own_base=False, own_adapter=False):
     """What is left to download, counting what a cut download already saved."""
     need = 0
     for name, size in SIZES.items():
-        if own_base and name == rewrite.BASE:
+        if (own_base and name == rewrite.BASE) or (own_adapter and name == rewrite.ADAPTER):
             continue
         final = os.path.join(folder, name)
         if not os.path.isfile(final):
@@ -246,30 +267,53 @@ def main():
         return 1
     os.makedirs(rewrite.MODEL_DIR, exist_ok=True)
     own = os.environ.get("HUMANIZE_BASE_MODEL")
+    own_adapter = os.environ.get("HUMANIZE_ADAPTER")
+    adapter_arch = None
+    if own_adapter:
+        if not os.path.isfile(own_adapter):
+            print(f"ERROR: HUMANIZE_ADAPTER is {own_adapter}, and there is no file there.")
+            return 1
+        if not own:
+            print("ERROR: HUMANIZE_ADAPTER needs HUMANIZE_BASE_MODEL: the base model it was "
+                  "trained for (the 4.3 GB download is Qwen3-4B-Base only).")
+            return 1
+        problem, adapter_arch = check_adapter(own_adapter)
+        if problem:
+            print(f"ERROR: {problem}")
+            return 1
+        print(f"Your adapter: {own_adapter}")
     if own:
         if not os.path.isfile(own):
             print(f"ERROR: HUMANIZE_BASE_MODEL is {own}, and there is no file there.")
             return 1
-        problem, warning = check_base(own)
+        problem, warning = check_base(own, adapter_arch)
         if problem:
             print(f"ERROR: {problem}")
             return 1
         print(f"Your base model: {own}" + (f"\nWARNING: {warning}" if warning else ""))
-    need = bytes_missing(rewrite.MODEL_DIR, own_base=bool(own))
+    need = bytes_missing(rewrite.MODEL_DIR, own_base=bool(own), own_adapter=bool(own_adapter))
     free = shutil.disk_usage(rewrite.MODEL_DIR).free
     if need > free:
         print(f"ERROR: the model needs {need / 1e9:.1f} GB more and {rewrite.MODEL_DIR} has "
               f"{free / 1e9:.1f} GB free. Free some space, or set HUMANIZE_MODEL_DIR to a "
               "folder on another disk.")
         return 1
-    download(rewrite.ADAPTER, ADAPTER_URL, ADAPTER_SHA)
+    if not own_adapter:
+        download(rewrite.ADAPTER, ADAPTER_URL, ADAPTER_SHA)
     if not own:
         download(rewrite.BASE, BASE_URL, BASE_SHA)
     print(f"\nReady: {rewrite.MODEL_DIR}")
-    for path in (os.path.join(rewrite.MODEL_DIR, rewrite.ADAPTER), rewrite.base_model_path()):
+    for path in (rewrite.adapter_path(), rewrite.base_model_path()):
         print(f"  {path}  {os.path.getsize(path) / 1e9:.2f} GB")
     print(f"  llama.cpp: {rewrite.llama_binary()}")
     found = None if rewrite.device_args()[1] == "0" else gpu_devices()
+    pinned = os.environ.get("HUMANIZE_GPU_DEVICE", "").strip()
+    if found and pinned:  # the run uses only that one; say so, and warn on a typo
+        mine = [d for d in found if d.split(":")[0] == pinned]
+        if not mine:
+            print(f"WARNING: HUMANIZE_GPU_DEVICE is {pinned}, and llama.cpp lists "
+                  + "; ".join(d.split(":")[0] for d in found) + ".")
+        found = mine or found
     if rewrite.device_args()[1] == "0":
         print("  runs on: the CPU (HUMANIZE_GPU=1 runs it on a GPU)")
     elif found == []:
@@ -278,6 +322,14 @@ def main():
               "NVIDIA included) or -DGGML_CUDA=ON (NVIDIA; an RTX 50 needs CUDA 12.8+).")
     else:
         print("  runs on: the GPU" + (f" ({'; '.join(found)})" if found else ""))
+    server = rewrite.server_binary()
+    if server:
+        on = os.environ.get("HUMANIZE_SERVER", "").strip().lower() in ("1", "yes", "on", "true")
+        print(f"  llama-server: {server}"
+              + ("" if on else " (HUMANIZE_SERVER=1 loads the model once per run, not per try)"))
+    elif os.environ.get("HUMANIZE_SERVER"):
+        print("WARNING: HUMANIZE_SERVER is set, but there is no llama-server next to "
+              "llama-completion or on the PATH: every try runs llama-completion.")
     return 0 if args.no_test else smoke_test()
 
 

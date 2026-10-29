@@ -178,12 +178,14 @@ def main():
     py = "python" if os.name == "nt" else "python3"
     print("\nDone. Open a new session of your agent and ask it, for example:")
     print("  «humanize this text without changing what it says»")
-    print("\nIt starts with the Claude pipeline, which needs nothing else. For the base-model\n"
-          "pipeline (measured, and fully local) you also need the model, once (~4.6 GB):")
+    print("\nIt needs llama.cpp and the local model (~4.6 GB, once; the second line only verifies\n"
+          "them when they are already there):")
     if os.name == "nt":
         print("  winget install llama.cpp")
-    else:
+    elif sys.platform == "darwin":
         print("  brew install llama.cpp")
+    else:
+        print("  brew install llama.cpp   (or build it: github.com/ggml-org/llama.cpp)")
     print(f'  {py} "{os.path.join(HERE, "scripts", "install_model.py")}"')
     return 0
 

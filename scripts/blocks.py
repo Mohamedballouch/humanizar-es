@@ -15,14 +15,17 @@ list is handled item by item with its markers.
 
 A LaTeX file (.tex) is read by scripts/latex.py instead: parse(text, "latex") gives the
 paragraphs of prose and a frame with everything else, kept byte for byte, and
-unparse(frame, paragraphs) puts the file back together. Every function here takes that
-format as its last argument.
+unparse(frame, paragraphs) puts the file back together. A Word file (.docx) is read by
+scripts/word.py the same way, from its document.xml: read(path) and write(path, text,
+template) open and save either kind. Every function here takes the format as its last
+argument.
 
 Standard library only.
 """
 import os
 import re
 
+import word
 import latex
 
 FENCE = re.compile(r"^\s*(```|~~~)")
@@ -33,8 +36,34 @@ PROSE = ("prose", "list")  # the kinds that are rewritten, joined and scanned
 
 
 def format_of(path):
-    """«latex» for a .tex file, «text» for anything else (plain text or Markdown)."""
-    return "latex" if os.path.splitext(path)[1].lower() in (".tex", ".latex", ".ltx") else "text"
+    """«latex» for a .tex file, «docx» for a Word file, «text» for anything else (plain
+    text or Markdown)."""
+    ext = os.path.splitext(path)[1].lower()
+    return "latex" if ext in (".tex", ".latex", ".ltx") else "docx" if ext == ".docx" else "text"
+
+
+def read(path):
+    """The text the scripts work on: the file itself (a BOM dropped), or a Word file's
+    document.xml with its styles."""
+    if format_of(path) == "docx":
+        return word.read(path)
+    with open(path, encoding="utf-8-sig") as fh:
+        return fh.read()
+
+
+def write(path, text, template=None):
+    """Saves what read() gave back, changed: a Word file is rebuilt from the template's
+    zip (by default the file itself), with only its document.xml replaced."""
+    if format_of(path) == "docx":
+        word.write(path, text, template or path)
+        return
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def plain(text, fmt="text"):
+    """The whole text as a reader reads it, for the checks that count figures and words."""
+    return latex.plain(text) if fmt == "latex" else word.plain(text) if fmt == "docx" else text
 
 
 def parse(text, fmt="text"):
@@ -42,10 +71,75 @@ def parse(text, fmt="text"):
     frame is the blank line between paragraphs; for LaTeX, everything that is not prose."""
     if fmt == "latex":
         return latex.parse(text)
+    if fmt == "docx":
+        return word.parse(text)
     paras = split(text)
     if not paras:
         return [text], []
-    return [""] + ["\n\n"] * (len(paras) - 1) + ["\n"], paras
+    # The file is the blocks joined by blank lines plus a final line end; the frame is
+    # what lies between the blocks that are rewritten, a references section included.
+    frame, kept, cur = [], [], ""
+    zone = reference_zone(paras)
+    for i, b in enumerate(paras):
+        cur += "" if i == 0 else "\n\n"
+        if i in zone:  # a bibliography is copied as it is, like LaTeX's frame
+            cur += b
+            continue
+        frame.append(cur)
+        kept.append(b)
+        cur = ""
+    if not kept:
+        return [text], []
+    frame.append(cur + "\n")
+    return frame, kept
+
+
+REFERENCES = re.compile(
+    r"(?:references?|bibliography|works cited|literature cited|reference list|cited works|"
+    r"bibliograf[ií]a|referencias(?: bibliogr[aá]ficas)?|obras citadas|fuentes)", re.I)
+AFTER_REFERENCES = re.compile(r"(?:appendix|appendices|annex|anexos?|ap[eé]ndices?|chapter|"
+                              r"cap[ií]tulo|part|parte)\b", re.I)
+
+
+def _heading_text(block):
+    """(level, words) of a heading or a title line («## 6. References», «REFERENCES:»,
+    «**Bibliography**»); (None, None) for anything else."""
+    lines = [ln for ln in block.split("\n") if ln.strip()]
+    if len(lines) == 1 and HEADING.match(lines[0].lstrip()):
+        level = len(lines[0].lstrip()) - len(lines[0].lstrip().lstrip("#"))
+        words = lines[0].lstrip().lstrip("#")
+    elif len(lines) == 2 and re.fullmatch(r"\s*(?:=+|-+)\s*", lines[1]):
+        level, words = (1 if "=" in lines[1] else 2), lines[0]
+    elif len(lines) == 1 and len(lines[0].split()) <= 4:
+        level, words = 7, lines[0]  # a plain title line: it ends at an appendix or the end
+    else:
+        return None, None
+    words = re.sub(r"^[\s*_]*(?:[0-9IVX]+[.)]?\s+)?|[\s*_:.]*$", "", words.strip())
+    return level, words
+
+
+def reference_zone(paras):
+    """Indexes of the blocks that make up a references section of a text or Markdown
+    manuscript, its heading included: from «References» (or «Bibliography», «Referencias»…)
+    to the next heading of the same or a higher level, an appendix, or the end. Rewriting
+    a bibliography entry by entry would change authors, titles and years."""
+    zone = set()
+    level = None
+    for i, b in enumerate(paras):
+        h_level, words = _heading_text(b)
+        if level is not None:
+            # «Appendix A» ends it, a short entry by an author named Part («Part, J. (2019).») not
+            appendix = AFTER_REFERENCES.match(words or "") and (
+                h_level < 7 or not re.search(r"[,(]", words))
+            if h_level is not None and (appendix or (h_level < 7 and h_level <= level)):
+                level = None
+            else:
+                zone.add(i)
+                continue
+        if h_level is not None and REFERENCES.fullmatch(words or ""):
+            level = h_level
+            zone.add(i)
+    return zone
 
 
 def unparse(frame, paragraphs):
@@ -95,6 +189,8 @@ def _is_code(block):
 def kind(block, fmt="text"):
     if fmt == "latex":
         return "list" if latex.is_list(block) else "prose"
+    if fmt == "docx":
+        return "prose"  # each Word paragraph, list items included, is one unit
     lines = [ln for ln in block.split("\n") if ln.strip()]
     if not lines:
         return "prose"
@@ -148,6 +244,8 @@ def rebuild(pairs, fmt="text"):
 def prose_of(block, fmt="text"):
     """The text a reader reads in a prose or list block, without the list markers (and,
     in LaTeX, without commands and math); "" for blocks that are not prose."""
+    if fmt == "docx":
+        return word.prose_of(block)
     k = kind(block, fmt)
     texts = [t for _, t in items(block, fmt)] if k == "list" else [block] if k == "prose" else []
     if fmt == "latex":

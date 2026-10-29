@@ -1,5 +1,230 @@
 # Changelog
 
+## 5.8.0 — October 29, 2026
+
+**Theses and reports in Word, and what 12 logged real-model tries showed.**
+
+- **Word files (`.docx`) in every script**, with the standard library: only
+  `word/document.xml` changes; styles, images, footnotes, comments, headers and a citation
+  manager's data are copied byte for byte. Only the prose of the body is rewritten.
+  Headings (by style or outline level, a thesis template's own style based on Heading 1
+  included), captions, contents, the bibliography (by style, after a «References» heading or
+  bold line, or a citation manager's field), quotations and code (by style), equations,
+  tables, text boxes and Word's own document parts stay; paragraphs with tracked changes or
+  comments are left as they are and counted. The paragraphs of other content controls,
+  where templates keep an abstract, are prose. Inside a paragraph, italics, bold,
+  superscript, citation fields (Zotero, Mendeley, EndNote), cross-references, links,
+  equations and footnote marks reach the model as placeholders; a piece written against
+  the word before it stays against it (a real run wrote «simulation ¹»). Long paragraphs are
+  rewritten in parts, `--part` included. Tested on files from pandoc and LibreOffice and a
+  thesis with a Zotero field, a tracked change and a bibliography field: the result opens in
+  python-docx and LibreOffice, and the real model kept every piece in place.
+- **`fix.py`**: step 6's fixes, one to three words of one paragraph, in any format; more is
+  refused («regenerate it»). In Word it keeps every placeholder exactly once and the parts
+  record, so `--part` still works after a fix. `--show` prints what each `[n]` stands for.
+- **`convert.py 02-final.docx -o 02-final.pdf`**, with LibreOffice; it reads the PDF back for
+  the figures.
+- **Citations in text, Markdown and Word are placeholders**: «(Smith et al., 2020; Lee,
+  2019)», a numbered cluster «[12], [14]–[16]» as one piece (alone, its dash came back as
+  «--»), footnote marks and inline math. A narrative citation («Wang (2021) reports») stays
+  words: locked as a piece it came back as «… are noisy [3]», and with only «(2021)» locked
+  the model dropped «Wang». Its authors are concepts now, and its year a figure. Placeholders
+  are put back in one pass: «[2] … [1]» could come back swapped.
+- **Two bracket habits of the model are repaired before any check**: «(1)»… «(4)» written for
+  the placeholders, and «Wang [2021]» for «Wang (2021)» (that try passed every check).
+- **A concept of two plain words matches the orders English moves it into**: «outage cost*»
+  finds «the cost of outages», «on-site microgrid» finds «microgrids on-site».
+- **`HUMANIZE_SERVER=1`** loads the model once per run in llama.cpp's own server (on
+  127.0.0.1 only) instead of once per try; with no `llama-server`, or if it stops, the tries
+  run `llama-completion` as before. On 4 CPU cores a try's overhead fell from 6.5 s to 0.1–3 s
+  (a retry of the same paragraph reuses its prompt), about a fifth of each try; more is
+  expected with a GPU, where writing is fast (not measured). `install_model.py` says whether
+  `llama-server` is there.
+- **Words the model will not see are reported in Word**: a size or colour set by hand on
+  part of a pasted paragraph keeps those words out of the rewrite, and `rewrite.py` names
+  the paragraphs where that is a quarter or more of the words. Fixed on the way: a run
+  whose only formatting was a language mark, which Word writes all the time, counted as
+  formatted and its words were locked; language marks, ligatures and black set by hand are
+  plain text now.
+- **Every candidate is printed with the review sheet's flags** (a negation added or lost, a
+  claim made firmer, a comparison flipped) and ranked by them, then by tells. A real part
+  candidate wrote «without changing the energy cost» for «rather than lower energy cost»:
+  its added «without» now heads the line.
+- **A candidates run leaves the parts record alone**; it wrote back the copy it read at
+  its start, undoing a `--take` or a `fix.py` made while it ran.
+- **Part candidates of two parts add up.** A part candidate is saved as the whole paragraph,
+  so taking part 4's after part 2's put the old part 2 back (found on the journal abstract).
+  `--take` of a part candidate now replaces only its part.
+- **COMPARISON** in `check.py` and `review.py`: an active «outperform» that came back passive
+  («… outperformed by …»), or «superior» that became «inferior». A try accepted by the new
+  checks read «controllers are out-performed by rule based scheduling» for «controllers
+  outperform rule-based schedules»; the flag points straight at it.
+
+Replayed through the new checks, the 12 logged tries of a paragraph with five citations and
+two formulas went from 2 usable to 6 (references/evidence.md §2f).
+
+## 5.7.0 — October 26, 2026
+
+**For journal articles, theses and reports.**
+
+- **A references section is never rewritten in text and Markdown either** (LaTeX's
+  bibliography always was). Found by test: a Markdown manuscript's «## References» entries
+  were prose and list blocks, so the base model would have rewritten authors, titles and
+  years. From a References / Bibliography / Works Cited / Referencias / Bibliografía heading
+  (Markdown, underlined, or a plain title line, numbered or bold) to the next heading of its
+  level, an appendix or a new chapter, everything is copied byte for byte.
+- **Acronym definitions are concepts.** «a large language model (LLM, …)» came back as «an
+  LLM» in a real run; `check.py`, `rewrite.py` and `clean.py` now find each long form the
+  original defines (its initials spell the acronym) and require it.
+- **`check.py` prints word counts**, and `--word-limit N` fails a version over a journal's
+  abstract limit (the real abstract went from 294 to 302 words).
+- **`rewrite.py --resume`** continues an interrupted run (a thesis takes hours on a CPU):
+  paragraphs already rewritten in the output stay, the rest are redone.
+
+## 5.6.0 — October 26, 2026
+
+From the second real-model run on the 294-word journal abstract:
+
+- **Counts in words are figures when added.** «30 independently trained teams of three
+  agents» (the teams have six) passed every check; digits and number words are now counted
+  together, so an extra «three» is an added figure and the try is not used. Dropping a count
+  in words («all three» -> «each») is still allowed.
+- **`$…$` the original never had is removed** from a try, like `\%`: all 15 tries of one part
+  wrote «$B=3$» and «$p$».
+- **`--protect-terms`** (option, off): the multi-word, hyphenated and numbered concepts reach
+  the model as fixed placeholders it writes around. Tried on the abstract: whole tries still
+  0 of 6, and the model put a locked term in the wrong place («the optimiser's curse
+  directives»). It stays off; references/evidence.md §2e has the three runs.
+- **`join.py --words-per-period N`**: a long paragraph keeps about one period per N words
+  (`--pauses 2` alone gave the abstract a 150-word sentence; with 55, four sentences of
+  53–91 words). Not measured against detectors.
+- **A paragraph over 150 words gets 2 whole tries, not 6, before it is split in parts**: the
+  abstract failed 6 of 6 whole tries, 10 of its 13 minutes.
+- **`--only N --part K --candidates M`**: several versions of one part, each saved as the
+  whole paragraph; `--take` adopts one and keeps the parts record right.
+
+## 5.5.0 — October 26, 2026
+
+**From the first run with the real model in a test session** (Qwen3-4B-Base + HIP on CPU,
+a 294-word journal abstract, 15 minutes). Every whole-paragraph try lost a term, the
+automatic split rewrote it in 4 parts and kept one paragraph, and all figures and concepts
+passed; reading it showed what the guards missed.
+
+- **Concepts match across hyphens, apostrophes and spelling.** «on-site» = «on site» =
+  «onsite», a curly apostrophe = a straight one, «realised» = «realized», «modelling» =
+  «modeling». A concept typed with a straight apostrophe used to fail against the user's own
+  original with a curly one, and part 4 was kept as the original over «realised-profit».
+- **HIP's «\%» in plain text** is turned into «%». It used to be kept as a stray symbol, and
+  the percent repair then wrote «6.7%\%».
+- **`check.py` reports negations the version added.** The run turned «made after only the
+  incumbent has been scored» into «generated without having seen the incumbent score»; the
+  added «without» is where to look first.
+- **`rewrite.py --only N --part K`** regenerates one part of a paragraph rewritten in parts
+  and keeps the others and their hand fixes (the parts are saved in `….parts.json`, and the
+  run prints each part's first words).
+
+## 5.4.1 — October 26, 2026
+
+From cleaning two real AI texts by hand through the gate (the English example essay: 20% of
+its words edited, tells 29 -> 5, passed; the microgrid abstract: 10%, passed):
+
+- `clean.py import` prints each changed sentence beside the one it replaced. The test cleanup
+  turned «played a crucial role in addressing» into «solved» and dropped an «often»: both
+  pass every check, and only reading the pair shows them. SKILL.md asks for that reading.
+- The «tells score did not drop» warning no longer fires when the original scored 0: the
+  abstract's slop («makes important contributions to the continuing debates», «specifically
+  utilizing») is the kind `tells.py` does not count.
+
+## 5.4.0 — October 26, 2026
+
+**Optional step 4a: clean the slop before the base model (English, on request).**
+
+- `scripts/clean.py export` puts the prose in a work file (LaTeX as placeholders); the agent
+  edits only the sentences that carry an AI pattern; `clean.py import` is the gate. It writes
+  `00-clean` only if no figure (sign included), concept, quotation, reference, link or LaTeX
+  placeholder changed, and at most half of any paragraph's words and a third of the whole
+  text's were edited; otherwise it writes nothing and lists the problems and the changed
+  sentences. It reports the tells score before and after.
+- `references/slop-patterns.md`: the 26 patterns of blader/humanizer (MIT) in our own words,
+  with this step's rules on top: only the slop, the paragraphs kept, papers keep their passive
+  voice and hedges.
+- Step 5 then rewrites `00-clean`; steps 6 and 8 still check against `00-original`.
+- `references/detectors.md`: the A/B test (with and without the cleanup, on the same text and
+  day, with both controls) that decides whether the step becomes the default. Until then the
+  default is the measured pipeline.
+- `rewrite.py`'s warning for a paragraph kept as the original no longer blames a concept's
+  spelling when no concept was lost.
+
+## 5.3.0 — October 24, 2026
+
+Found by running the whole pipeline (rewrite, check, join, check, PDF) on two abstracts and
+a LaTeX paper with a stand-in model that makes the real one's mistakes: it drops a term on
+long sources, wraps a figure in `$…$`, drops a minus sign and writes British spelling.
+
+- `--candidates` on a long paragraph (over 150 words, or `--max-words`) built none: every
+  whole-paragraph try lost a term. Each candidate is now built part by part and stays one
+  paragraph.
+- A paragraph or part the model gave back word for word was reported with empty brackets;
+  the report now says so.
+- `install_model.py` names only the GPU in `HUMANIZE_GPU_DEVICE`, and warns when that name
+  is not one llama.cpp lists.
+
+## 5.2.0 — October 23, 2026
+
+**Sturdier guards, from what went wrong on a real abstract.**
+
+- A figure keeps its minus sign: «-0.7» that became «0.7» was passing every guard; now it is
+  a lost figure and an added one, so the try is not used and `check.py` fails. «+2.8» is 2.8,
+  and «5-7» or «COVID-19» carry no negative number. «−» (U+2212) is a minus too.
+- A try that adds markup the original does not have (a stray `$`, `\`, `{`, `*`, `_`, `#`…)
+  is used only when every try does; the report names the symbols to delete.
+- A paragraph over 150 words that fails every try is redone automatically in runs of whole
+  sentences (`--max-words 100`) and stays one paragraph.
+- `check.py` lists words switched between British and American spelling, and counts a file
+  named twice once (it used to double its concepts).
+
+## 5.1.0 — October 23, 2026
+
+**An abstract stays one paragraph.** On a 250-word abstract the model kept dropping terms,
+and the agent split it into four paragraphs to rewrite it, then delivered four.
+
+- `rewrite.py --max-words N` rewrites a paragraph longer than N words in runs of whole
+  sentences (never inside «et al.», math or braces), each with its own guards, and puts it
+  back as one paragraph.
+- `check.py` fails when a version has a different number of paragraphs than the original.
+- SKILL.md: never split or merge paragraphs; a long one that keeps losing terms is redone
+  with `--max-words 100`.
+
+## 5.0.0 — October 23, 2026
+
+**One pipeline again: the base model.** The Claude pipeline (4.1.0–4.4.1), where the agent
+rewrote the prose itself, is removed: it was never measured, and chat-model rewrites scored
+64–100% in Grammarly. The skill always rewrites with the local base model now.
+
+- `scripts/prose.py` and its tests are gone; SKILL.md has one pipeline, its steps numbered
+  1 to 9 (4 is the installation check), and the README has no two-pipelines table.
+- `install.py` says the model and llama.cpp are needed, and how to get llama.cpp on Linux.
+
+## 4.4.1 — October 23, 2026
+
+- README: a bigger model is not claimed to be better. The paper (arXiv:2605.19516, §4.2)
+  finds that from 4B up the meaning-versus-detector trade-off shifts only modestly, not
+  necessarily for the better, and that HIP needs only a model large enough to paraphrase well.
+  Qwen3-4B-Base stays the default; use a Base adapter, never an Instruct one.
+
+## 4.4.0 — October 23, 2026
+
+**A bigger base model.**
+
+- `HUMANIZE_ADAPTER` points the base-model pipeline at a HIP adapter in GGUF other than the
+  4B one, for a bigger base model set in `HUMANIZE_BASE_MODEL` (Qwen3-8B-Base, 14B-Base,
+  Llama-3-8B). The authors' adapters are on Hugging Face; the README gives the
+  `convert_lora_to_gguf.py` steps and the memory each size needs.
+- `install_model.py` checks the adapter is a LoRA in GGUF, that the base model has its
+  architecture, and, as before, that it is a base model and not the chat one (Qwen3 or
+  «instruct»/«chat» in the name). Nothing is downloaded when both are yours.
+- Not measured: every result in this repo is Qwen3-4B-Base.
+
 ## 4.3.2 — October 23, 2026
 
 - `HUMANIZE_GPU_DEVICE=Vulkan1` pins the GPU run to one device of `llama-completion

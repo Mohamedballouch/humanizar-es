@@ -17,7 +17,8 @@ Paper: Xu et al., 2026, *Base Models Look Human To AI Detectors*,
 [*Signs of AI writing*](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing)
 (WikiProject AI Cleanup) and its ranking by strength in
 [blader/humanizer](https://github.com/blader/humanizer) (MIT, © 2025 Siqi Chen). The phrase
-lists are short and rewritten as patterns; `tests/test_tools.py` quotes four of that
+lists are short and rewritten as patterns; `references/slop-patterns.md` summarizes the
+26 patterns of blader/humanizer in our own words, with a link to the original; `tests/test_tools.py` quotes four of that
 project's before/after examples as fixtures, under its MIT license.
 
 `rewrite.py` runs the models with [llama.cpp](https://github.com/ggml-org/llama.cpp) (MIT),

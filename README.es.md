@@ -16,22 +16,9 @@ humana: **0% en Grammarly, 0% en ZeroGPT y 0% IA / 98% humano en GPTZero**, con 
 ensayo de 1,990 palabras que empezó en 45%. Úsalo como *skill* de tu agente (Claude Code,
 Codex, OpenCode, Antigravity), o a mano.
 
-## Dos procesos
-
-| | **Proceso Claude** (el de la skill por defecto) | **Proceso con modelo base** |
-|---|---|---|
-| Quién escribe | Tu agente, párrafo por párrafo | Un modelo base local sin entrenamiento de chat (Qwen3-4B-Base + HIP) |
-| Qué lo vigila | `prose.py import`: cada cifra, concepto, cita, referencia, enlace y marcador de LaTeX, o el párrafo se rechaza | Las mismas comprobaciones, dentro de `rewrite.py` |
-| Necesita | Nada que instalar | Una descarga única de 4.6 GB; de 30 s a 3 min por párrafo en CPU |
-| Medido | **Todavía no.** Las reescrituras de otros modelos de chat dieron 64–100% en Grammarly | Los resultados de abajo |
-| Tu texto | Lo lee el proveedor de tu agente, como todo lo que lee tu agente | Se reescribe en tu computadora; a mano, nunca sale de ella |
-
-La skill usa el proceso Claude salvo que pidas el modelo base, y ofrece el modelo base para
-los párrafos que un detector todavía marque. A mano, sin agente, es el proceso con modelo
-base. Todas las cifras de abajo son del proceso con modelo base.
-
-No es un cambiador de sinónimos ni un generador de faltas de ortografía. El proceso con
-modelo base tiene cuatro etapas, y cada una existe porque un experimento controlado mostró
+No es un cambiador de sinónimos ni un generador de faltas de ortografía. Reescribe un modelo
+base local sin entrenamiento de chat (Qwen3-4B-Base + HIP), en tu computadora. El proceso
+tiene cuatro etapas, y cada una existe porque un experimento controlado mostró
 qué mide de verdad un detector: una variable a la vez, el mismo texto en cada condición, y
 un texto humano de control y el original de IA en cada sesión.
 
@@ -55,7 +42,7 @@ midió en mitades. El ensayo de Dragon Ball se corrió con una versión anterior
 
 ---
 
-## El método (proceso con modelo base)
+## El método
 
 ```
  original ─► 1. reescribe ─► 2. fidelidad ─► 3. ritmo ──► 4. selección ──► final
@@ -210,8 +197,6 @@ seleccionar candidatos de lo que tu detector todavía marque.
 
 ### El modelo (una vez, ~4.6 GB)
 
-Solo para el proceso con modelo base: el proceso Claude no necesita instalar nada.
-
 Necesitas Python 3.9+ (sin paquetes extra) y [llama.cpp](https://github.com/ggml-org/llama.cpp):
 
 | | macOS y Linux | Windows |
@@ -234,6 +219,36 @@ En formato de Hugging Face (una carpeta de `.safetensors`), conviértelo antes c
 `python3 ~/llama.cpp/convert_hf_to_gguf.py /ruta/a/Qwen3-4B-Base --outtype q8_0 --outfile
 Qwen3-4B-Base.Q8_0.gguf` (tras `pip install -r ~/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt`).
 
+**Un modelo más grande.** Los autores publicaron adaptadores HIP para Qwen3 0.6B, 1.7B, 4B,
+8B y 14B (y Llama-3 8B y 70B), cada uno entrenado para su propio modelo base: el adaptador y el
+modelo deben coincidir. Uno más grande no es claramente mejor: el artículo encuentra que a partir de 4B el
+equilibrio entre sentido conservado y detectores superados cambia solo un poco, «no
+necesariamente para mejor» (el de 70B conserva algo más el sentido que el de 8B, con un
+equilibrio parecido), y que HIP solo necesita un modelo lo bastante grande para parafrasear
+bien; los más pequeños (0.6B, 1.7B) quedan por debajo. Así que Qwen3-4B-Base, el de serie, es
+la opción sensata. Usa un adaptador Base, nunca uno «Instruct» (el entrenamiento de chat es lo
+que reconocen los detectores). Para probar Qwen3-8B-Base de todos modos, en Ubuntu (no medido
+aquí: todas las mediciones de este repositorio son del 4B):
+
+```bash
+pip install -U huggingface_hub -r ~/llama.cpp/requirements/requirements-convert_lora_to_gguf.txt
+hf download YixuanEvenXu/Qwen3-8B-Base-HIP-adapter --local-dir ~/hip/adapter-8b
+python3 ~/llama.cpp/convert_lora_to_gguf.py --base-model-id Qwen/Qwen3-8B-Base \
+    --outtype q8_0 --outfile ~/hip/hip-qwen3-8b-base.gguf ~/hip/adapter-8b
+hf download mradermacher/Qwen3-8B-Base-GGUF Qwen3-8B-Base.Q4_K_M.gguf --local-dir ~/hip
+echo 'export HUMANIZE_BASE_MODEL=$HOME/hip/Qwen3-8B-Base.Q4_K_M.gguf' >> ~/.bashrc
+echo 'export HUMANIZE_ADAPTER=$HOME/hip/hip-qwen3-8b-base.gguf' >> ~/.bashrc
+source ~/.bashrc && python3 scripts/install_model.py
+```
+
+`install_model.py` lee las dos cabeceras y rechaza una combinación equivocada, y la reescritura
+de prueba falla con el mensaje de llama.cpp si el adaptador no corresponde al modelo. Memoria,
+con el adaptador (~0,8 GB) y el contexto: el 8B en Q4_K_M necesita unos 7 GB (una GPU de 8 GB
+lo contiene entero; con 8 GB de RAM corre en CPU, despacio), en Q8_0 unos 11 GB. El 14B en
+Q4_K_M necesita unos 11 GB: una GPU de 8 GB contiene la mayor parte (`HUMANIZE_GPU=30`) y el
+resto va a la RAM. Elige el archivo **Base**, no el de chat, y quita las dos variables para
+volver al de 4B.
+
 Corre en CPU: bastan 8 GB de RAM libre, sin GPU. En una Mac M4 tarda de 30 a 60 segundos
 por párrafo; en una PC de hace unos años, de 1 a 3 minutos.
 
@@ -249,12 +264,20 @@ corría el modelo. Si el portátil lista también su gráfica integrada, `export
 HUMANIZE_GPU_DEVICE=Vulkan1` (un nombre de `llama-completion --list-devices`) fija la
 ejecución en la dedicada. Es el mismo modelo en los dos casos; las mediciones se hicieron en CPU.
 
+**Carga el modelo una sola vez.** `export HUMANIZE_SERVER=1` arranca el servidor de llama.cpp
+(`llama-server`, que viene con llama-completion en brew, winget y una compilación con cmake)
+una vez por ejecución, escuchando solo en 127.0.0.1, y cada intento pasa a ser una petición
+en vez de un proceso nuevo que vuelve a cargar el modelo. En 4 núcleos de CPU, el costo fijo
+de cada intento bajó de 6,5 s a 0,1–3 s (el modelo carga una vez, en 4 s), más o menos una
+quinta parte de cada intento; con GPU, donde escribir un párrafo es rápido, la parte debería
+ser mayor (no medido). Si falta `llama-server` o se detiene, los intentos usan
+llama-completion como antes.
+
 ---
 
 ## Úsalo a mano
 
-A mano, sin agente, usas el proceso con modelo base. En Windows escribe `python` donde dice
-`python3`.
+A mano, sin agente: en Windows escribe `python` donde dice `python3`.
 
 **1. Anota lo que no se puede perder** en `concepts.txt`: nombres propios completos,
 cifras, términos. Uno por línea, variantes con `|`, `*` para prefijos.
@@ -276,11 +299,29 @@ ese párrafo:
 
 ```bash
 python3 scripts/check.py mi-texto.txt reescrito.txt --concepts concepts.txt
+python3 scripts/review.py mi-texto.txt reescrito.txt --concepts concepts.txt -o revision.md
 python3 scripts/tells.py mi-texto.txt reescrito.txt      # frases hechas de IA, por párrafo
+python3 scripts/fix.py reescrito.txt 4 "la mayoría" "muchos"     # rechaza más de 3 palabras
 python3 scripts/rewrite.py mi-texto.txt -o reescrito.txt --concepts concepts.txt --only 6,11
 ```
 
+`review.py` pone cada oración del original junto a la de la reescritura y marca dónde suele
+cambiar el sentido: una cifra, una negación, una afirmación más firme, una comparación que
+puede haberse invertido («outperform» -> «outperformed by»), una oración perdida o agregada.
+Lee cada par.
+
+Un párrafo largo que sigue perdiendo términos (un resumen de 150+ palabras): añade
+`--max-words 100`. Se reescribe en tramos de oraciones completas y sigue siendo **un**
+párrafo; nunca lo partas a mano (`check.py` falla si cambia el número de párrafos).
+
 No le pidas a ChatGPT que lo corrija: le devuelve la huella que el modelo base quitó.
+
+**Opcional, solo en inglés: limpiar los patrones de IA antes.** `scripts/clean.py` deja que
+el agente edite solo las frases con patrones de IA (`references/slop-patterns.md`) antes de
+que reescriba el modelo base, y no escribe nada si cambió una cifra, un concepto, una cita o
+un marcador de LaTeX, o si se editó más de la mitad de un párrafo o un tercio del texto. No
+está medido; `references/detectors.md` tiene la prueba A/B. Los textos en español van
+directo al modelo base.
 
 **4. Reconstruye el ritmo** (el idioma se detecta solo):
 
@@ -313,7 +354,7 @@ una idea.
 
 Hay ejemplos completos, con cada arreglo a mano anotado, en [`examples/`](examples/).
 
-### Artículos: LaTeX entra, LaTeX sale; PDF entra, PDF sale
+### Artículos y tesis: LaTeX, Word y PDF
 
 Con un `.tex`, los scripts trabajan solo sobre la prosa. El preámbulo, las secciones, las
 ecuaciones, las figuras, las tablas, los algoritmos, los teoremas, los pies de figura, los
@@ -329,6 +370,30 @@ python3 scripts/join.py 01-reescrito.tex -o 02-final.tex --pausas 2
 python3 scripts/check.py articulo.tex 02-final.tex --concepts concepts.txt
 python3 scripts/convert.py 02-final.tex -o 02-final.pdf      # lo compila, BibTeX incluido
 ```
+
+**Una tesis o un informe en Word** funciona igual, `.docx` entra y `.docx` sale, sin instalar
+nada. Solo se reescribe la prosa del cuerpo: los títulos, los pies de figura, el índice, la
+bibliografía (tras un título «Referencias» o una línea en negrita, o un campo de Zotero,
+Mendeley o EndNote), las citas en bloque y el código, las ecuaciones, las tablas, las notas
+al pie y los estilos quedan idénticos byte a byte, y dentro de un párrafo la cursiva, la
+negrita, los campos de cita, las referencias cruzadas, los enlaces y las llamadas a nota son
+marcadores. Los párrafos con control de cambios o comentarios quedan como están: acéptalos y
+resuélvelos antes si quieres que se reescriban. Los arreglos se hacen con `fix.py`, que
+además mantiene al día el registro de tramos de un párrafo largo.
+
+```bash
+python3 scripts/rewrite.py tesis.docx -o 01-reescrito.docx --concepts concepts.txt
+python3 scripts/fix.py 01-reescrito.docx 12 --show                # el párrafo, con cada [n]
+python3 scripts/join.py 01-reescrito.docx -o 02-final.docx --pausas 2
+python3 scripts/check.py tesis.docx 02-final.docx --concepts concepts.txt
+python3 scripts/convert.py 02-final.docx -o 02-final.pdf          # con LibreOffice
+```
+
+**Las citas se conservan en todos los formatos.** En LaTeX `\cite` es un marcador; en Word,
+el campo del gestor de referencias; en texto y Markdown, «(Smith et al., 2020; Lee, 2019)»,
+«[12], [14]–[16]», las llamadas a nota y las fórmulas `$…$`. Una cita narrativa («Wang (2021)
+sostiene») sigue siendo parte de la oración, y un intento que pierda el autor o el año no se
+usa.
 
 Si solo tienes el PDF, `convert.py` lo pasa a texto primero (une las líneas, deshace la
 separación silábica, quita números de página y encabezados, y encierra ecuaciones, celdas
@@ -394,7 +459,7 @@ No. Cambia quién escribió las oraciones y su ritmo, no la ortografía.
 Tres de los cuatro ensayos llegaron a 0% en Grammarly, y el más reciente pasa Grammarly,
 GPTZero y ZeroGPT a la vez. Lo que puede ser determinista lo es (la unión usa una semilla
 fija; ZeroGPT da el mismo número al mismo texto), la salida que copia el original se
-rechaza, y 123 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
+rechaza, y 175 pruebas corren en cada cambio en Ubuntu, macOS y Windows. Los detectores
 cambian con el tiempo; por eso cada sesión lleva controles.
 
 **¿La selección manda mi texto a algún lado?**
@@ -438,17 +503,20 @@ humanizar-es/
 ├── install.py               instala la skill (install.sh: atajo para macOS/Linux)
 ├── scripts/
 │   ├── install_model.py     baja el modelo (una vez)
-│   ├── prose.py             proceso Claude: la prosa a un archivo de trabajo y de vuelta, vigilada
 │   ├── rewrite.py           etapas 1, 2 y 4: reescribe, cuida la fidelidad, candidatos
 │   ├── check.py             etapa 2: conceptos y negaciones, original contra reescritura
+│   ├── review.py            etapa 2: cada oración junto a la de la reescritura, con avisos
+│   ├── fix.py               etapa 2: un arreglo de una a tres palabras, en cualquier formato
+│   ├── clean.py             paso 4a opcional (inglés): quitar patrones de IA antes, vigilado
 │   ├── tells.py             etapas 2 y 4: frases hechas de IA por párrafo, qué regenerar
 │   ├── blocks.py            párrafos y bloques de Markdown (código, tablas, listas), compartido
 │   ├── latex.py             artículos en LaTeX: la prosa, y marcadores para fórmulas y comandos
-│   ├── convert.py           PDF a texto, texto a PDF, LaTeX a PDF
+│   ├── word.py              archivos de Word: la prosa, y marcadores para formato y campos
+│   ├── convert.py           PDF a texto, texto a PDF, LaTeX y Word a PDF
 │   └── join.py              etapa 3: reconstruye el ritmo de cada párrafo
 ├── examples/                ejemplos completos en español y en inglés
 ├── references/              todas las mediciones y cómo medir
-└── tests/                   123 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
+└── tests/                   175 pruebas en Ubuntu, macOS y Windows (sin red ni modelo)
 ```
 
 Los nombres viejos de los scripts (`hip.py`, `unir.py`, `verificar_fidelidad.py`,

@@ -16,22 +16,8 @@ human: **0% in Grammarly, 0% in ZeroGPT and 0% AI / 98% human in GPTZero**, on t
 1,990-word essay that started at 45%. Use it as a *skill* for your coding agent (Claude
 Code, Codex, OpenCode, Antigravity), or by hand.
 
-## Two pipelines
-
-| | **Claude pipeline** (the skill's default) | **Base-model pipeline** |
-|---|---|---|
-| Who writes | Your agent, paragraph by paragraph | A local base model without chat training (Qwen3-4B-Base + HIP) |
-| What guards it | `prose.py import`: every figure, concept, quotation, reference, link and LaTeX placeholder, or the paragraph is refused | The same checks, inside `rewrite.py` |
-| Needs | Nothing to install | A one-time 4.6 GB download; 30 s to 3 min per paragraph on CPU |
-| Measured | **Not yet.** Rewrites by other chat models scored 64–100% in Grammarly | The results below |
-| Your text | Read by your agent's provider, like anything your agent reads | Rewritten on your computer; by hand, it never leaves it |
-
-The skill runs the Claude pipeline unless you ask for the base model, and offers the base
-model for the paragraphs a detector still flags. Run by hand, without an agent, it is the
-base-model pipeline. Every number below is the base-model pipeline's.
-
-It is not a synonym spinner or a typo generator. The base-model pipeline has four stages,
-and every one exists because a controlled experiment showed what a detector actually
+It is not a synonym spinner or a typo generator. A local base model without chat training
+(Qwen3-4B-Base + HIP) does the rewriting, on your computer. The pipeline has four stages, and every one exists because a controlled experiment showed what a detector actually
 measures: one variable at a time, the same text in every condition, and a human-written
 control and the AI original in every session.
 
@@ -55,7 +41,7 @@ halves. The Dragon Ball essay ran on an earlier version of the pipeline.*
 
 ---
 
-## The method (base-model pipeline)
+## The method
 
 ```
  original ─► 1. rewrite ──► 2. fidelity ──► 3. rhythm ──► 4. selection ──► final
@@ -210,8 +196,6 @@ rhythm, and select candidates for whatever your detector still flags.
 
 ### The model (once, ~4.6 GB)
 
-Only for the base-model pipeline: the Claude pipeline needs nothing installed.
-
 You need Python 3.9+ (no extra packages) and [llama.cpp](https://github.com/ggml-org/llama.cpp):
 
 | | macOS and Linux | Windows |
@@ -234,6 +218,34 @@ In Hugging Face format (a folder of `.safetensors`), convert it first with llama
 `python3 ~/llama.cpp/convert_hf_to_gguf.py /path/to/Qwen3-4B-Base --outtype q8_0 --outfile
 Qwen3-4B-Base.Q8_0.gguf` (after `pip install -r ~/llama.cpp/requirements/requirements-convert_hf_to_gguf.txt`).
 
+**A bigger model.** The authors published HIP adapters for Qwen3 0.6B, 1.7B, 4B, 8B and 14B
+(and Llama-3 8B and 70B), each trained for its own base model: the adapter and the model must
+match. A bigger model is not clearly better: the paper finds that from 4B up the trade-off
+between meaning kept and detectors passed shifts only modestly, «not necessarily for the
+better» (the 70B is slightly steadier in meaning than the 8B, with a similar trade-off), and
+that HIP needs only a model large enough to paraphrase well; the smaller ones (0.6B, 1.7B) are
+below that. So Qwen3-4B-Base, the default, is the sensible choice. Take a Base adapter, never
+one of the «Instruct» ones (chat training is what detectors recognize). To try Qwen3-8B-Base
+anyway, on Ubuntu (not measured here: every measurement in this repo is of the 4B):
+
+```bash
+pip install -U huggingface_hub -r ~/llama.cpp/requirements/requirements-convert_lora_to_gguf.txt
+hf download YixuanEvenXu/Qwen3-8B-Base-HIP-adapter --local-dir ~/hip/adapter-8b
+python3 ~/llama.cpp/convert_lora_to_gguf.py --base-model-id Qwen/Qwen3-8B-Base \
+    --outtype q8_0 --outfile ~/hip/hip-qwen3-8b-base.gguf ~/hip/adapter-8b
+hf download mradermacher/Qwen3-8B-Base-GGUF Qwen3-8B-Base.Q4_K_M.gguf --local-dir ~/hip
+echo 'export HUMANIZE_BASE_MODEL=$HOME/hip/Qwen3-8B-Base.Q4_K_M.gguf' >> ~/.bashrc
+echo 'export HUMANIZE_ADAPTER=$HOME/hip/hip-qwen3-8b-base.gguf' >> ~/.bashrc
+source ~/.bashrc && python3 scripts/install_model.py
+```
+
+`install_model.py` reads both headers and refuses a mix-up, and the test rewrite fails with
+llama.cpp's own message if the adapter does not fit the model. Memory, with the adapter
+(~0.8 GB) and the context: 8B at Q4_K_M needs about 7 GB (a GPU with 8 GB holds it all; 8 GB of
+RAM does it on the CPU, slowly), at Q8_0 about 11 GB. 14B at Q4_K_M needs about 11 GB: a
+GPU with 8 GB holds most of it (`HUMANIZE_GPU=30`) and the rest goes to RAM. Pick the
+**Base** file, not the chat one, and unset both variables to go back to the 4B.
+
 It runs on CPU: 8 GB of free RAM is enough, no GPU. On an M4 Mac it takes about 30–60
 seconds per paragraph; on a few-years-old PC, 1 to 3 minutes.
 
@@ -249,12 +261,19 @@ while the model ran. If the laptop lists its integrated graphics too, `export
 HUMANIZE_GPU_DEVICE=Vulkan1` (a name from `llama-completion --list-devices`) pins the run to
 the discrete one. It is the same model either way; the measurements were made on CPU.
 
+**Load the model once.** `export HUMANIZE_SERVER=1` starts llama.cpp's own server
+(`llama-server`, which comes with llama-completion in brew, winget and a cmake build) once per
+run, listening on 127.0.0.1 only, and every try becomes a request to it instead of a new
+process that loads the model again. On 4 CPU cores a try's overhead fell from 6.5 s to
+0.1–3 s (the model loads once, in 4 s), about a fifth of each try; with a GPU, where writing
+a paragraph is fast, the share should be larger (not measured). If `llama-server` is missing
+or stops, the tries run llama-completion as before.
+
 ---
 
 ## Use it by hand
 
-By hand, without an agent, you run the base-model pipeline. On Windows, type `python`
-where it says `python3`.
+By hand, without an agent: on Windows, type `python` where it says `python3`.
 
 **1. List what must not be lost** in `concepts.txt`: full proper names, figures, terms.
 One per line, variants with `|`, `*` for prefixes.
@@ -276,11 +295,36 @@ paragraph:
 
 ```bash
 python3 scripts/check.py my-text.txt rewritten.txt --concepts concepts.txt
+python3 scripts/review.py my-text.txt rewritten.txt --concepts concepts.txt -o review.md
 python3 scripts/tells.py my-text.txt rewritten.txt       # stock AI phrases left, per paragraph
+python3 scripts/fix.py rewritten.txt 4 "the majority" "many"     # refuses more than 3 words
 python3 scripts/rewrite.py my-text.txt -o rewritten.txt --concepts concepts.txt --only 6,11
 ```
 
+`review.py` puts each sentence of the original beside the rewrite's and flags where meaning
+most often changes: a figure, a negation, a claim made firmer, a comparison that may have
+flipped («outperform» -> «outperformed by»), a dropped or added sentence. Read every pair.
+
+A long paragraph that keeps losing terms (an abstract of 150+ words): add `--max-words 100`.
+It is rewritten in runs of whole sentences and stays **one** paragraph; never split it into
+paragraphs by hand (`check.py` fails when the number of paragraphs changes).
+
 Don't ask ChatGPT to fix it: it puts back the fingerprint the base model removed.
+
+**Optional, English only: clean the slop first.** Ask your agent to "clean it first" and it
+edits only the sentences with AI patterns (`references/slop-patterns.md`, from
+[blader/humanizer](https://github.com/blader/humanizer)) before the base model rewrites.
+`clean.py import` is the gate: nothing is written if a figure, concept, quotation or LaTeX
+placeholder changed, or if more than half of a paragraph or a third of the text was edited.
+It is not measured yet; `references/detectors.md` has the A/B test that decides whether it
+becomes the default.
+
+```bash
+python3 scripts/clean.py export my-text.txt -o 00-slop.txt     # edit the slop in this file
+python3 scripts/clean.py import my-text.txt 00-slop.txt -o 00-clean.txt --concepts concepts.txt
+python3 scripts/rewrite.py 00-clean.txt -o rewritten.txt --concepts concepts.txt
+python3 scripts/check.py my-text.txt rewritten.txt --concepts concepts.txt   # against the original
+```
 
 **4. Rebuild the rhythm** (the language is detected automatically):
 
@@ -315,7 +359,7 @@ it dropped an idea.
 
 Worked examples, with every hand fix listed, are in [`examples/`](examples/).
 
-### Papers: LaTeX in, LaTeX out; PDF in, PDF out
+### Papers and theses: LaTeX, Word and PDF
 
 Give the scripts a `.tex` and they work on the prose only. The preamble, sections,
 equations, figures, tables, algorithms, theorems, captions, comments and bibliography stay
@@ -330,6 +374,28 @@ python3 scripts/join.py 01-rewritten.tex -o 02-final.tex --pauses 2
 python3 scripts/check.py paper.tex 02-final.tex --concepts concepts.txt
 python3 scripts/convert.py 02-final.tex -o 02-final.pdf      # compiles it, BibTeX included
 ```
+
+**A thesis or report in Word** works the same way, `.docx` in and `.docx` out, with nothing
+to install. Only the prose of the body is rewritten: headings, captions, the table of
+contents, the bibliography (after a «References» heading or bold line, or a Zotero, Mendeley
+or EndNote field), quotations and code, equations, tables, footnotes and styles stay byte
+for byte, and inside a paragraph italics, bold, citation fields, cross-references, links and
+footnote marks are placeholders. Paragraphs with tracked changes or comments are left as
+they are: accept and resolve them first if they should be rewritten. Fixes go through
+`fix.py`, which also keeps a long paragraph's parts record right.
+
+```bash
+python3 scripts/rewrite.py thesis.docx -o 01-rewritten.docx --concepts concepts.txt
+python3 scripts/fix.py 01-rewritten.docx 12 --show                 # the paragraph, [n] explained
+python3 scripts/join.py 01-rewritten.docx -o 02-final.docx --pauses 2
+python3 scripts/check.py thesis.docx 02-final.docx --concepts concepts.txt
+python3 scripts/convert.py 02-final.docx -o 02-final.pdf          # with LibreOffice
+```
+
+**Citations hold in every format.** In LaTeX `\cite` is a placeholder; in Word, a citation
+manager's field; in text and Markdown, «(Smith et al., 2020; Lee, 2019)», «[12], [14]–[16]»,
+footnote marks and inline math `$…$`. A narrative citation («Wang (2021) reports») stays part
+of the sentence, and a try that drops its author or its year is not used.
 
 With only a PDF, `convert.py` turns it into text first (it joins lines, undoes hyphenation,
 drops page numbers and running headers, and fences equations, table cells and references
@@ -393,7 +459,7 @@ No. It changes who wrote the sentences and their rhythm, not the spelling.
 Three of four essays reached 0% in Grammarly, and the latest one passes Grammarly, GPTZero
 and ZeroGPT at once. The pieces that can be deterministic are (the joining is seeded;
 ZeroGPT gives the same score for the same text), output that copies the original is
-refused, and 123 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
+refused, and 175 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
 over time, which is why every session carries controls.
 
 **Does the selection step send my text anywhere?**
@@ -436,17 +502,20 @@ humanizar-es/
 ├── install.py               installs the skill (install.sh: shortcut for macOS/Linux)
 ├── scripts/
 │   ├── install_model.py     downloads the model (once)
-│   ├── prose.py             Claude pipeline: the prose out to a work file and back, guarded
 │   ├── rewrite.py           stages 1, 2 and 4: rewrite, guard fidelity, candidates
 │   ├── check.py             stage 2: concepts and negations, original vs rewrite
+│   ├── review.py            stage 2: each sentence beside the rewrite's, flagged
+│   ├── fix.py               stage 2: a fix of one to three words, in any format
+│   ├── clean.py             optional step 4a: the slop edited out first, through a gate
 │   ├── tells.py             stages 2 and 4: stock AI phrases per paragraph, what to regenerate
 │   ├── blocks.py            paragraphs and Markdown blocks (code, tables, lists), shared
 │   ├── latex.py             LaTeX papers: the prose, and placeholders for math and commands
-│   ├── convert.py           PDF to text, text to PDF, LaTeX to PDF
+│   ├── word.py              Word files: the prose, and placeholders for formatting and fields
+│   ├── convert.py           PDF to text, text to PDF, LaTeX and Word to PDF
 │   └── join.py              stage 3: rebuild the rhythm of each paragraph
 ├── examples/                worked examples in Spanish and English
 ├── references/              every measurement, and how to measure
-└── tests/                   123 tests on Ubuntu, macOS and Windows (no network, no model)
+└── tests/                   175 tests on Ubuntu, macOS and Windows (no network, no model)
 ```
 
 The old script names (`hip.py`, `unir.py`, `verificar_fidelidad.py`, `instalar_hip.py`)

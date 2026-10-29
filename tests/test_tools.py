@@ -11,6 +11,7 @@ import sys
 import tempfile
 import unittest
 import unicodedata
+import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(ROOT, "scripts")
@@ -31,12 +32,15 @@ CAN_READ_PDF = bool(shutil.which("pdftotext"))
 
 sys.path.insert(0, SCRIPTS)
 import blocks  # noqa: E402
+import clean  # noqa: E402
 import check  # noqa: E402
 import convert  # noqa: E402
+import fix  # noqa: E402
 import join  # noqa: E402
 import latex  # noqa: E402
 import rewrite  # noqa: E402
 import tells  # noqa: E402
+import word  # noqa: E402
 
 
 def run(*args, **kw):
@@ -84,6 +88,115 @@ class Check(unittest.TestCase):
             self.assertEqual(r.returncode, 1)
             self.assertIn("LOST", r.stdout)
             self.assertIn("«no contradiccion»", r.stdout)
+
+    def test_a_split_paragraph_fails_the_check(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            orig, split = os.path.join(tmp, "o.txt"), os.path.join(tmp, "s.txt")
+            with open(orig, "w", encoding="utf-8") as fh:
+                fh.write("The microgrid saves 5.7% of the cost. The supervisor is fast.\n")
+            with open(split, "w", encoding="utf-8") as fh:
+                fh.write("The microgrid saves 5.7% of the cost.\n\nThe supervisor is fast.\n")
+            conc = os.path.join(tmp, "c.txt")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            r = run(sys.executable, script("check.py"), orig, split, "--concepts", conc)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("PARAGRAPHS: the original has 1", r.stdout)
+
+    def test_a_minus_sign_is_part_of_the_figure(self):
+        o = "The interval is -0.7 to +2.8, COVID-19 hit pages 5-7, and $-1.5$ or (−3) units."
+        self.assertEqual(check.numbers_lost(o, o.replace("+2.8", "2.8")), [])  # «+» is no sign
+        self.assertEqual(check.numbers_lost(o, o.replace("-0.7", "0.7")), ["-0.7"])
+        self.assertEqual(check.numbers_added(o, o.replace("-0.7", "0.7")), ["0.7"])
+        self.assertEqual(check.numbers_lost(o, o.replace("(−3)", "(-3)")), [])  # − is -
+        self.assertEqual(check.numbers_lost(o, o.replace("$-1.5$", "$1.5$")), ["-1.5"])
+        self.assertEqual(check.figures(o)[0]["19"], 1)  # COVID-19 has no negative 19
+        self.assertEqual(check.figures(o)[0]["7"], 1)   # nor «5-7» a negative 7
+
+    def test_concepts_match_across_hyphens_apostrophes_and_spelling(self):
+        found = lambda term, text: bool(check.pattern(term).search(check.norm(text)))  # noqa: E731
+        self.assertTrue(found("on-site microgrid", "an onsite microgrid"))
+        self.assertTrue(found("on-site microgrid", "an on site microgrid"))
+        self.assertTrue(found("realised-profit", "the realized profit"))
+        self.assertTrue(found("optimiser's curse", "the optimizer’s curse"))
+        self.assertTrue(found("modelling", "modeling"))
+        self.assertFalse(found("modelling", "models"))
+        self.assertFalse(found("realise", "reality"))
+        self.assertFalse(found("ser", "servicio"))
+
+    def test_check_reports_negations_the_version_added(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            o, v, c = (os.path.join(tmp, n) for n in ("o.txt", "v.txt", "c.txt"))
+            with open(o, "w", encoding="utf-8") as fh:
+                fh.write("Its first proposals, made after the incumbent was scored, use the microgrid.\n")
+            with open(v, "w", encoding="utf-8") as fh:
+                fh.write("Its first proposals, made without having seen the score, use the microgrid.\n")
+            with open(c, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            r = run(sys.executable, script("check.py"), o, v, "--concepts", c)
+            self.assertIn("NEGATIONS the version added", r.stdout)
+            self.assertIn("without having", r.stdout)
+
+    def test_a_count_in_words_the_original_never_gave_is_added(self):
+        o = "Three optimisers search. On 30 trained agent teams, all three raise profit with six agents."
+        self.assertEqual(check.numbers_added(o, o.replace("agent teams", "teams of three agents")), ["three"])
+        self.assertEqual(check.numbers_added(o, o.replace("all three raise", "each raises")), [])
+        self.assertEqual(check.numbers_added(o, o.replace("six agents", "6 agents")), [])
+        self.assertEqual(check.numbers_added(o, "One of them, once a day: " + o), [])  # «one», «once»
+
+    def test_acronym_definitions_are_found_and_required(self):
+        o = ("We use a large language model (LLM, Claude) and a Markov Decision Process (MDP), "
+             "see Fig. 2 (PDF) and Smith (2020).")
+        self.assertEqual(check.definitions(o), [("large language model", "LLM"),
+                                                ("Markov Decision Process", "MDP")])
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b, c = (os.path.join(tmp, n) for n in ("o.txt", "v.txt", "c.txt"))
+            with open(a, "w", encoding="utf-8") as fh:
+                fh.write(o + "\n")
+            with open(b, "w", encoding="utf-8") as fh:
+                fh.write("An LLM (Claude) and a Markov Decision Process (MDP) are used, see "
+                         "Fig. 2 (PDF) and Smith (2020).\n")
+            with open(c, "w", encoding="utf-8") as fh:
+                fh.write("LLM\n")
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", c)
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("large language model (LLM)", r.stdout)
+
+    def test_a_word_limit_fails_a_longer_version(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b, c = (os.path.join(tmp, n) for n in ("o.txt", "v.txt", "c.txt"))
+            with open(a, "w", encoding="utf-8") as fh:
+                fh.write("The microgrid saves money every single day.\n")
+            with open(b, "w", encoding="utf-8") as fh:
+                fh.write("Every single day, the on-site microgrid saves the plant some money.\n")
+            with open(c, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", c)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIn("WORDS:", r.stdout)
+            self.assertIn("11 (+4)", r.stdout)
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", c, "--word-limit", "10")
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertIn("Over the limit of 10", r.stdout)
+
+    def test_british_and_american_spelling_are_reported(self):
+        o = "Optimization of the colour model and the modelling of the centre."
+        v = "Optimisation of the color model and the modelling of the center."
+        self.assertEqual(sorted(check.spelling_changes(o, v)),
+                         [("centre", "center"), ("colour", "color"), ("optimization", "optimisation")])
+        self.assertEqual(check.spelling_changes(o, o), [])
+        self.assertEqual(check.spelling_changes("We rise early.", "We rize early."), [])  # no «rise»->«rize» pair in the original
+
+    def test_check_counts_a_file_named_twice_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            f, conc = os.path.join(tmp, "a.txt"), os.path.join(tmp, "c.txt")
+            with open(f, "w", encoding="utf-8") as fh:
+                fh.write("The microgrid saves money.\n")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            r = run(sys.executable, script("check.py"), f, f, "--concepts", conc)
+            self.assertEqual(r.returncode, 0, r.stdout)
+            self.assertIn("1/1 = 100%", r.stdout)
 
     def test_negations_in_english(self):
         self.assertIn("not the", check.negations("This is not the answer."))
@@ -164,6 +277,43 @@ class Check(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+    def test_a_two_word_term_matches_the_orders_english_moves_it_into(self):
+        """A real run lost 3 of 10 tries to «the cost of outages» and «microgrids on-site»."""
+        for term, yes, no in (("outage cost*", ["outage costs", "the cost of outages", "cost of an outage"],
+                               ["costs outage", "outage time"]),
+                              ("on-site microgrid", ["onsite microgrids", "microgrids on-site",
+                                                     "microgrids on site"], ["microgrids at the site"]),
+                              ("Microsoft Teams", ["Microsoft Teams"], ["Teams of Microsoft"])):
+            for t in yes:
+                self.assertTrue(check.pattern(term).search(check.norm(t)), (term, t))
+            for t in no:
+                self.assertFalse(check.pattern(term).search(check.norm(t)), (term, t))
+
+    def test_a_comparison_that_may_have_flipped(self):
+        o = "Deep reinforcement learning controllers [2] outperform rule-based schedules in simulation."
+        inverted = "Deep reinforcement learning controllers are out-performed by rule based scheduling [2]."
+        self.assertEqual(check.comparison_changes(o, inverted), ["active «outperform» came back passive («… by»)"])
+        self.assertEqual(check.comparison_changes(o, o.replace("outperform", "beat")), [])
+        self.assertEqual(check.comparison_changes("A is superior to B.", "A is inferior to B."),
+                         ["«superior» became «inferior»"])
+        self.assertEqual(check.comparison_changes("B is outperformed by A.", "A outperforms B."),
+                         ["passive «… by» came back active"])
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = os.path.join(tmp, "a.txt"), os.path.join(tmp, "b.txt")
+            with open(a, "w", encoding="utf-8") as fh:
+                fh.write(o + "\n")
+            with open(b, "w", encoding="utf-8") as fh:
+                fh.write(inverted + "\n")
+            c = os.path.join(tmp, "concepts.txt")
+            with open(c, "w", encoding="utf-8") as fh:
+                fh.write("reinforcement learning\n")
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", c)
+            self.assertIn("COMPARISONS that may have flipped", r.stdout)
+            sheet = os.path.join(tmp, "sheet.md")
+            run(sys.executable, script("review.py"), a, b, "-o", sheet)
+            self.assertIn("FLAG: COMPARISON active «outperform» came back passive", read(sheet))
+
+
 class Join(unittest.TestCase):
     def test_joins_with_y_and_respects_names(self):
         t = ("Goku entrena todos los días. La serie lo muestra sin prisa. "
@@ -235,6 +385,19 @@ class Join(unittest.TestCase):
         self.assertNotIn("aI", out)
         self.assertNotIn("cOVID", out)
         self.assertIn("John F. Kennedy", out)
+
+    def test_a_long_paragraph_keeps_more_periods_with_words_per_period(self):
+        sentences = [f"The plant number {i} runs a shift of {i + 2} hours and the agents follow it."
+                     for i in range(1, 13)]
+        para = " ".join(sentences) + "\n"
+        plain = join.join_text(para, pauses=2, lang="en")
+        scaled = join.join_text(para, pauses=2, lang="en", words_per_period=40)
+        periods = lambda t: len(re.findall(r"\.(?:\s|$)", t))  # noqa: E731
+        self.assertLessEqual(periods(plain), 3)
+        self.assertGreater(periods(scaled), periods(plain))
+        self.assertEqual(join.join_text("Short one. Two here. Three now. Four too.\n", pauses=2,
+                                        lang="en", words_per_period=40),
+                         join.join_text("Short one. Two here. Three now. Four too.\n", pauses=2, lang="en"))
 
     def test_english_drops_filler_openers(self):
         par = ("Remote work grew fast in 2020. Many firms kept it after the crisis. Moreover, "
@@ -495,6 +658,327 @@ class Rewrite(unittest.TestCase):
             self.assertEqual(r.returncode, 2)
             self.assertIn("same count", r.stderr)
 
+    def test_a_long_paragraph_is_split_in_whole_sentences(self):
+        p = ("We propose a supervisor for six agents. It was tested by Smith et al. on four days "
+             "with care. Profit rose by 5.7% at the smallest budget of all. The gains were "
+             "smaller than predicted. Neither superiority nor equivalence was found here.")
+        runs = rewrite.parts(p, "text", 20)
+        self.assertGreater(len(runs), 1)
+        self.assertEqual(" ".join(runs), p)
+        self.assertTrue(all(len(r.split()) <= 20 for r in runs))
+        self.assertIn("Smith et al. on four days", " ".join(r for r in runs if "Smith" in r))
+        self.assertEqual(rewrite.parts(p, "text", 0), [p])     # off by default
+        self.assertEqual(rewrite.parts(p, "text", 500), [p])   # short enough
+        tex = ("We follow \\citet{a. B} closely. The cost is $x. Y$ per unit in every case we "
+               "ran. It drops by 5\\% overall. The rest stays the same as before.")
+        runs = rewrite.parts(tex, "latex", 10)
+        self.assertGreater(len(runs), 1)
+        self.assertTrue(any("\\citet{a. B} closely." in r for r in runs))
+        self.assertTrue(any("$x. Y$" in r for r in runs))
+        self.assertEqual(rewrite.parts("A comment % here.\nThen more words go on.", "latex", 2),
+                         ["A comment % here.\nThen more words go on."])
+
+    def test_max_words_keeps_one_paragraph(self):
+        text = ("Agents run every hour on the line. A supervisor picks a directive for them. "
+                "Three methods search the same space. The language model reads the history "
+                "first. Gains were smaller than predicted.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            log = os.path.join(tmp, "calls.txt")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\n"
+                         f"open({log!r}, 'a').write('x')\n"
+                         "sys.stdout.write(' then went on with other words in its own way.\\n</target_text>')\n")
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                    "--max-words", "12", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("one paragraph in", r.stdout)
+            result = read(out).strip()
+            self.assertNotIn("\n", result)
+            self.assertGreater(len(read(log)), 1)  # one call per part
+
+    def test_a_try_that_adds_markup_is_a_soft_problem(self):
+        o = "Profit rose by 5.7% at the smallest budget, and the agents kept learning every day."
+        r = "At the smallest budget profit went up by $5.7%$, while the agents went on learning daily."
+        self.assertEqual(rewrite.symbols_added(o, r), ["$"])
+        self.assertEqual(rewrite.acceptable(o, r, set(), [], 0.9)[0], "(symbols added)")
+        self.assertIn("(symbols added)", rewrite.SOFT)  # kept if every try has it, and reported
+        self.assertEqual(rewrite.symbols_added("Costs $5 a day.", "A day costs $5."), [])
+
+    def test_a_long_paragraph_that_fails_is_redone_in_parts(self):
+        sentences = ["The supervisor picks a directive for the microgrid every hour."] + [
+            f"Sentence number {w} talks about the agents and the line and the energy cost here."
+            for w in ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+                      "ten", "eleven", "twelve")]
+        text = " ".join(sentences) + "\n"
+        self.assertGreater(len(text.split()), rewrite.AUTO_PARTS)
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "fake.py")
+            # It drops «microgrid» whenever the source is long, like the real model did.
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nargs = sys.argv[1:]\n"
+                         "prompt = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                         "src = prompt.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+                         "words = src.split()[2:]\n"
+                         "out = ' '.join(w for w in words if len(src.split()) < 120 or w != 'microgrid')\n"
+                         "out = out.replace('talks about', 'is about').replace('every hour', 'each hour')\n"
+                         "sys.stdout.write(' ' + out + '\\n</target_text>')\n")
+            src, out, conc = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("rewriting it in", r.stdout)
+            result = read(out).strip()
+            self.assertNotIn("\n", result)       # still one paragraph
+            self.assertIn("microgrid", result)    # and the term is back
+            self.assertIn("is about", result)     # rewritten, not the original
+            self.assertIn("paragraph 1, part 2:", r.stdout)
+            # Redo only part 2: a hand fix in part 1 survives, part 2 is regenerated.
+            fixed = result.replace("each hour", "every single hour", 1)
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write(fixed + "\n")
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--only", "1", "--part", "2", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("part 2 of", r.stdout)
+            self.assertIn("every single hour", read(out))
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--only", "1",
+                    "--part", "9", env=env)
+            self.assertEqual(r.returncode, 2)
+            self.assertIn("has parts 1 to", r.stderr)
+            # Candidates for part 2 alone: whole paragraphs, measured in context, then --take.
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--only", "1", "--part", "2", "--candidates", "2", "--tries", "1",
+                    "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            cands = sorted(f for f in os.listdir(out + ".candidates") if f.startswith("p01-part2-")
+                           and f.endswith(".txt"))
+            self.assertEqual(len(cands), 2, r.stdout)
+            first = read(os.path.join(out + ".candidates", cands[0])).strip()
+            self.assertIn("every single hour", first)   # the other parts, hand fix included
+            self.assertNotIn("\n", first)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out,
+                    "--take", "1=" + os.path.join(out + ".candidates", cands[0]), env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--only", "1", "--part", "2", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # the record followed --take
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--only", "1", "--candidates", "2", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            folder = out + ".candidates"
+            found = sorted(f for f in os.listdir(folder) if re.fullmatch(r"p01-\d+\.txt", f))
+            self.assertEqual(len(found), 2, r.stdout)  # whole-paragraph tries all lose «microgrid»
+            for f in found:
+                c = read(os.path.join(folder, f)).strip()
+                self.assertIn("microgrid", c)
+                self.assertNotIn("\n", c)
+
+    def test_a_try_identical_to_the_original_is_named_in_the_report(self):
+        report = {"untouched": [], "copied": [], "tells": [], "numbers": [], "symbols": []}
+        rewrite.note(report, "1 (part 3)", "Same text.", "Same text.", None,
+                     rewrite.collections.Counter(), "en")
+        self.assertEqual(report["untouched"], ["1 (part 3) (the model gave it back unchanged)"])
+
+    def test_a_latex_percent_in_plain_text_is_repaired(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\n"
+                         "sys.stdout.write(' went up by 5.7-6.7\\\\% at the budget of three in the plant.\\n</target_text>')\n")
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Daily profit rose by 5.7–6.7% at the smallest budget of three.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                    "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("5.7-6.7% at", read(out))
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\n"
+                         "sys.stdout.write(' went up by 5.7–6.7% at $B=3$ in the plant, the smallest budget.\\n</target_text>')\n")
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                    "--max-copied", "1", env=env)
+            self.assertIn("at B=3 in", read(out))
+            self.assertNotIn("$", read(out))
+            self.assertNotIn("\\", read(out))
+
+    def test_terms_of_art_can_be_locked_for_the_model(self):
+        concepts = check.load_concepts_from_lines(["cross-entropy method", "frozen", "directive*",
+                                                   "large language model | LLM"]) \
+            if hasattr(check, "load_concepts_from_lines") else None
+        if concepts is None:
+            with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+                fh.write("cross-entropy method\nfrozen\ndirective*\nlarge language model | LLM\non-site\n")
+            self.addCleanup(os.remove, fh.name)
+            concepts = check.load_concepts(fh.name)
+        text = ("Frozen agents use a cross-entropy method and a large language model (LLM) to pick "
+                "directives on-site, see [1].")
+        masked, terms = rewrite.protect_terms(text, concepts)
+        self.assertIn("a [2] and a [3]", masked)               # numbered after the existing [1]
+        self.assertIn("Frozen agents", masked)                  # one plain word stays readable
+        self.assertIn("pick directives", masked)
+        self.assertEqual(sorted(terms.values()), ["cross-entropy method", "large language model", "on-site"])
+        self.assertEqual(rewrite.restore_terms(masked, terms), text)
+        self.assertIsNone(rewrite.restore_terms(masked.replace("[3]", ""), terms))
+
+    def test_protect_terms_reaches_the_model_and_comes_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            log = os.path.join(tmp, "prompt.txt")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nargs = sys.argv[1:]\n"
+                         "p = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                         f"open({log!r}, 'w', encoding='utf-8').write(p)\n"
+                         "sys.stdout.write(' now sets [1] against [2] on the line.\\n</target_text>')\n")
+            src, out, conc = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("This paper compares the cross-entropy method with random search on the line.\n")
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("cross-entropy method\nrandom search\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--protect-terms", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("the [1] with [2]", read(log))
+            self.assertIn("This paper now sets cross-entropy method against random search", read(out))
+
+    def test_a_long_paragraph_gets_two_whole_tries_before_parts(self):
+        text = " ".join(f"Sentence {w} says the microgrid line runs and the agents follow the plan here."
+                        for w in ("one", "two", "three", "four", "five", "six", "seven", "eight",
+                                  "nine", "ten", "eleven", "twelve", "thirteen")) + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            calls = os.path.join(tmp, "calls")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import os, sys\nargs = sys.argv[1:]\n"
+                         f"open({calls!r}, 'a').write('x')\n"
+                         "p = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                         "src = p.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+                         "out = ' '.join(src.split()[2:]).replace('runs and', 'works while')\n"
+                         "if len(src.split()) > 120: out = out.replace('microgrid ', '')\n"
+                         "sys.stdout.write(' ' + out + '\\n</target_text>')\n")
+            src, out, conc = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            with open(conc, "w", encoding="utf-8") as fh:
+                fh.write("microgrid\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--concepts", conc,
+                    "--tries", "6", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            parts = int(re.search(r"rewriting it in (\d+) parts", r.stdout).group(1))
+            self.assertIn("left as the original in 2 tries", r.stdout)
+            self.assertEqual(len(read(calls)), 2 + parts)
+
+    def test_resume_redoes_only_what_is_still_the_original(self):
+        text = ("The first paragraph talks about the plant and its energy use today.\n\n"
+                "The second paragraph talks about the agents and the supervisor here.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = self._echo_llama(tmp)
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            with open(out, "w", encoding="utf-8") as fh:  # stopped after paragraph 1
+                fh.write("Already rewritten by hand, kept.\n\n" + text.split("\n\n")[1])
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--resume",
+                    "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("1 paragraphs kept, 1 to do", r.stdout)
+            first, second = read(out).strip().split("\n\n")
+            self.assertEqual(first, "Already rewritten by hand, kept.")
+            self.assertNotEqual(second, text.split("\n\n")[1].strip())
+
+    def test_citations_and_formulas_are_placeholders_in_text(self):
+        t = ("Outage costs fall (Smith et al., 2020; Lee & Park, 2019). Controllers [12], [14]–[16] "
+             "and [^3] win, though Wang (2021) and Kim (2020, p. 4) disagree; we use $r_t = p_t q_t$ "
+             "and \\(\\gamma\\), at costs of $5 and $10 (95% CI −0.7 to +2.8) (LLM, Claude) in 2020.")
+        shown, pieces = rewrite.protect_citations(t)
+        # a numbered cluster is one piece (alone, its «–» came back as «--»); a narrative
+        # citation stays words (locked, it came back as «… are noisy [3]»)
+        self.assertEqual(list(pieces.values()), ["(Smith et al., 2020; Lee & Park, 2019)",
+                                                 "[12], [14]–[16]", "[^3]", "$r_t = p_t q_t$",
+                                                 "\\(\\gamma\\)"])
+        self.assertIn("though Wang (2021) and Kim (2020, p. 4) disagree", shown)
+        self.assertIn("costs of $5 and $10 (95% CI −0.7 to +2.8) (LLM, Claude) in 2020.", shown)
+        self.assertEqual(rewrite.restore_terms(shown, pieces), t)
+
+    def test_the_authors_of_a_narrative_citation_are_concepts(self):
+        t = ("Wang (2021) and Kim (2020, p. 4) disagree. Recently, Álvarez y Núñez (2019) and "
+             "Smith et al. (2018) did not, nor did O’Brien’s (2017) model (Lee, 2016).")
+        self.assertEqual(check.cited_authors(t), [
+            ("Wang (2021)", "Wang"), ("Kim (2020, p. 4)", "Kim"),
+            ("Álvarez y Núñez (2019)", "Álvarez"), ("Álvarez y Núñez (2019)", "Núñez"),
+            ("Smith et al. (2018)", "Smith"), ("O’Brien’s (2017)", "O’Brien")])
+        concepts = check.with_definitions([("Kim", ["Kim"])], t)  # a concept already: not twice
+        self.assertEqual([c for c, _ in concepts].count("Kim (2020, p. 4)"), 0)
+        self.assertIn(("Wang (2021)", ["Wang"]), concepts)
+        lost = rewrite.concepts_in(t, concepts) - rewrite.concepts_in(t.replace("Wang ", ""), concepts)
+        self.assertEqual(lost, {"Wang (2021)"})
+
+    def test_brackets_the_model_swapped_are_put_back(self):
+        """A real try wrote «(1)»… «(4)» for the placeholders, others «Wang [2021]»."""
+        shown = ("Costs fall [1]. Controllers [2] win, though Wang (2021) and Kim (2020, p. 4) "
+                 "disagree; a list (3) stays.")
+        self.assertEqual(rewrite.repair_brackets(shown, "Costs fall (1). Controllers (2) win; Wang [2021] "
+                                                        "and Kim [2020, p.4] disagree, a list (3) stays."),
+                         "Costs fall [1]. Controllers [2] win; Wang (2021) and Kim (2020, p. 4) disagree, "
+                         "a list (3) stays.")
+        self.assertEqual(rewrite.repair_brackets(shown, "Costs fall [1], [2] win; Wang [2022] says."),
+                         "Costs fall [1], [2] win; Wang [2022] says.")  # another year is not repaired
+
+    def test_citations_out_of_order_come_back_in_place(self):
+        """«[2] … [1]» become pieces 1 and 2: putting them back one after the other swapped them."""
+        t = "As [2] showed, and [1] before it, costs fall."
+        shown, pieces = rewrite.protect_citations(t)
+        self.assertEqual(shown, "As [1] showed, and [2] before it, costs fall.")
+        self.assertEqual(rewrite.restore_terms(shown, pieces), t)
+        self.assertEqual(rewrite.restore_terms("Costs fall, as [1] showed and [2] before it.", pieces),
+                         "Costs fall, as [2] showed and [1] before it.")
+
+    def test_a_try_that_loses_a_citation_is_not_used(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            calls, fake = os.path.join(tmp, "calls"), os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import os, sys\n"
+                         f"c = {calls!r}\n"
+                         "n = int(open(c).read()) + 1 if os.path.exists(c) else 1\n"
+                         "open(c, 'w').write(str(n))\n"
+                         "out = ' gains in the plant shrink under [1], as Wang (2021) found.' if n == 1 else "
+                         "' gains in the plant shrink under [1], as Wang (2021) found with [2].'\n"
+                         "sys.stdout.write(out + '\\n</target_text>')\n")
+            src, out = os.path.join(tmp, "in.md"), os.path.join(tmp, "out.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("The reported gains shrink under $r_t = p_t$, as Wang (2021) found with [12].\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "2",
+                    "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("done, try 2", r.stdout)  # try 1 lost «[12]»
+            self.assertIn("shrink under $r_t = p_t$, as Wang (2021) found with [12].", read(out))
+
     def test_lead_replaces_the_opening_words(self):
         prompt, lead = rewrite.build_prompt("Uno de los problemas más importantes.", lead="Desde la")
         self.assertEqual(lead, "Desde la")
@@ -697,6 +1181,47 @@ class Rewrite(unittest.TestCase):
         self.assertIsNone(rewrite.markup_problem("Write to ana@example.com today.",
                                                  "Send it to ana@example.com now."))
 
+    def test_a_candidate_is_flagged_where_its_meaning_most_often_changed(self):
+        """A real part candidate: «without changing the energy cost» for «rather than lower
+        energy cost», which every check passed."""
+        src = "All three raise daily profit through higher throughput rather than lower energy cost."
+        cand = "The optimisers increase daily profit without changing the energy cost, by higher throughput."
+        self.assertEqual(rewrite.meaning_flags(src, cand), ["negation added «without changing»"])
+        self.assertEqual(rewrite.meaning_flags("A may help.", "A clearly helps."),
+                         ["hedge dropped «may»", "claim firmer «clearly»"])
+        self.assertEqual(rewrite.meaning_flags("A outperforms B.", "A is outperformed by B."),
+                         ["active «outperforms» came back passive («… by»)"])
+        self.assertEqual(rewrite.meaning_flags("The plant [1] may help.", "The plant [1] helps.", "marked"),
+                         ["hedge dropped «may»"])
+        self.assertEqual(rewrite.meaning_flags(src, src), [])
+
+    def test_part_candidates_of_two_parts_add_up(self):
+        """Candidates are whole paragraphs: taking part 3's after part 1's put part 1 back."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("First part is here. Second part is here. Third part is here.\n")
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("One is A. Two is B. Three is C.\n")
+            with open(out + ".parts.json", "w", encoding="utf-8") as fh:
+                json.dump({"1": {"source": ["First part is here.", "Second part is here.",
+                                            "Third part is here."],
+                                 "text": ["One is A.", "Two is B.", "Three is C."]}}, fh)
+            for k, whole, text in ((1, "One is new. Two is B. Three is C.", "One is new."),
+                                   (3, "One is A. Two is B. Three is new.", "Three is new.")):
+                cand = os.path.join(tmp, f"p01-part{k}-1.txt")
+                with open(cand, "w", encoding="utf-8") as fh:
+                    fh.write(whole + "\n")
+                with open(cand + ".part.json", "w", encoding="utf-8") as fh:
+                    json.dump({"paragraph": 1, "part": k, "text": text}, fh)
+            for k in (1, 3):
+                r = run(sys.executable, script("rewrite.py"), src, "-o", out,
+                        "--take", "1=" + os.path.join(tmp, f"p01-part{k}-1.txt"))
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(read(out).strip(), "One is new. Two is B. Three is new.")
+            self.assertEqual(json.loads(read(out + ".parts.json"))["1"]["text"],
+                             ["One is new.", "Two is B.", "Three is new."])
+
     def test_take_warns_when_a_candidate_changed_a_figure(self):
         with tempfile.TemporaryDirectory() as tmp:
             src, out, cand = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
@@ -782,7 +1307,7 @@ class Rewrite(unittest.TestCase):
                 "open(c, 'w').write(str(n))\n"
                 "words = ['la semilla crece despacio', 'el árbol nace de la semilla',\n"
                 "         'de la semilla sale un árbol']\n"
-                "body = ' ' + words[n % 3] + ' y el lead fue ' + lead.replace(' ', '_') + ' en la vuelta ' + 'abcdefghijklmnopqrst'[n] + ' del bosque.'\n"
+                "body = ' ' + words[n % 3] + ' y el lead fue ' + lead.replace(' ', '+') + ' en la vuelta ' + 'abcdefghijklmnopqrst'[n] + ' del bosque.'\n"
                 "sys.stdout.buffer.write((body + '\\n</target_text>').encode('utf-8'))\n")
         return fake
 
@@ -805,10 +1330,10 @@ class Rewrite(unittest.TestCase):
             self.assertEqual(files, ["p01-1.txt", "p01-2.txt", "p01-3.txt"])
             first = read(os.path.join(folder, files[0]))
             self.assertTrue(first.startswith("Desde la "), first)
-            self.assertIn("Desde_la", first)  # the lead reached the prompt
+            self.assertIn("Desde+la", first)  # the lead reached the prompt
             self.assertEqual(read(out), "Primero, ya corregido.\n\nSegundo, ya corregido.\n")
             self.assertIn("tells 0", r.stdout)
-            self.assertIn("fewest tells first", r.stdout)
+            self.assertIn("fewest flags and tells first", r.stdout)
             r = run(sys.executable, script("rewrite.py"), src, "-o", out,
                     "--take", "1=" + os.path.join(folder, files[1]), env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -842,6 +1367,25 @@ class Rewrite(unittest.TestCase):
                 "rest = ' '.join(source.split()[2:])\n"
                 "sys.stdout.buffer.write((' ' + rest + '\\n</target_text>').encode('utf-8'))\n")
         return fake
+
+    def test_a_candidates_run_leaves_the_parts_record_alone(self):
+        """It used to write back the record it read at its start, undoing a --take or a fix.py
+        made while it ran."""
+        text = "Año tras año, el pingüino camina sin prisa hacia el sur por la costa helada.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = self._fake_llama(tmp)
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            for path in (src, out):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            record = '{"7": {"source": ["a"], "text": ["b"]}}'
+            with open(out + ".parts.json", "w", encoding="utf-8") as fh:
+                fh.write(record)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--only", "1",
+                    "--candidates", "1", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(read(out + ".parts.json"), record)
 
     def test_runs_end_to_end_with_a_fake_llama(self):
         """The full path of rewrite.py without the model: prompt in a UTF-8 file, output
@@ -1027,6 +1571,126 @@ REVERSING_LLAMA = (
     "# every word changes; placeholders, figures and punctuation stay\n"
     "out = re.sub(r'[A-Za-z]{2,}', lambda m: m.group(0)[::-1], rest)\n"
     "sys.stdout.buffer.write((' ' + out + '\\n</target_text>').encode('utf-8'))\n")
+
+
+class Review(unittest.TestCase):
+    """Step 6's sheet: the original's sentences beside the rewrite's, flagged."""
+
+    def test_sentences_ignore_abbreviations(self):
+        import review
+        self.assertEqual(review.sentences("As Smith et al. show in Fig. 3, it works. It ends."),
+                         ["As Smith et al. show in Fig. 3, it works.", "It ends."])
+
+    def test_alignment_handles_merges_splits_drops_and_additions(self):
+        import review
+        a = ["The plant runs on a microgrid every hour.", "Six agents control the battery.",
+             "A supervisor picks a directive at midnight.", "Profit rose by six percent overall."]
+        b = ["Every hour the plant runs on a microgrid, and six agents control the battery.",
+             "At midnight a supervisor picks a directive.", "Weather data came from a station."]
+        pairs = review.align(a, b)
+        self.assertEqual(pairs[0], (a[:2], b[:1]))              # two merged into one
+        self.assertEqual(pairs[1], (a[2:3], b[1:2]))
+        kinds = [(len(o), len(n)) for o, n in pairs[2:]]
+        self.assertIn((1, 0), kinds)                            # profit sentence dropped
+        self.assertIn((0, 1), kinds)                            # weather sentence added
+
+    def test_the_sheet_flags_what_real_runs_got_wrong(self):
+        original = ("Three optimisers use a large language model (LLM) on 30 agent teams. "
+                    "Its first proposals, made after only the incumbent has been scored, may help. "
+                    "Neither superiority nor equivalence is established at B = 3.\n")
+        rewritten = ("Three optimisers use an LLM on 30 teams of three agents. "
+                     "Its first proposals, generated without having seen the incumbent, help. "
+                     "There is no significant difference at B = 3.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b, c, out = (os.path.join(tmp, n) for n in ("o.txt", "r.txt", "c.txt", "rev.md"))
+            for path, body in ((a, original), (b, rewritten), (c, "incumbent\n")):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+            r = run(sys.executable, script("review.py"), a, b, "--concepts", c, "-o", out)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            sheet = read(out)
+            self.assertIn("CONCEPT missing from the paragraph: large language model (LLM)", sheet)
+            self.assertIn("FIGURES added three", sheet)
+            self.assertIn("NEGATION added «without having»", sheet)
+            self.assertIn("hedge dropped «may»", sheet)
+            self.assertIn("added «significant»", sheet)
+            self.assertIn("3 pairs, 3 flagged", r.stdout)
+
+    def test_a_flagged_pair_names_its_part(self):
+        original = "The plant runs on a microgrid every hour of the day. Profit rose by 5.7% at B = 3.\n"
+        rewritten = "Each hour of the day the plant runs on a microgrid. Profit went up by 6.7% at B = 3.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = os.path.join(tmp, "o.txt"), os.path.join(tmp, "r.txt")
+            for path, body in ((a, original), (b, rewritten)):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+            with open(b + ".parts.json", "w", encoding="utf-8") as fh:
+                json.dump({"1": {"source": ["x", "y"], "text": ["Each hour of the day the plant runs on a microgrid.",
+                                                                 "Profit went up by 6.7% at B = 3."]}}, fh)
+            r = run(sys.executable, script("review.py"), a, b)
+            self.assertIn("FIGURES lost 5.7; added 6.7", r.stdout)
+            self.assertIn("--only 1 --part 2", r.stdout)
+            self.assertNotIn("--part 1", r.stdout)                # an unflagged pair names no part
+
+    def test_check_reports_claim_strength(self):
+        self.assertEqual(check.claim_changes("The results may suggest a trend.",
+                                             "The results clearly demonstrate a trend."),
+                         (["may", "suggest"], ["clearly", "demonstrate"]))
+        self.assertEqual(check.claim_changes("It may work.", "It might work, maybe."), ([], []))
+        self.assertEqual(check.claim_changes("Los datos sugieren un efecto.",
+                                             "Los datos demuestran un efecto significativo."),
+                         (["sugieren"], ["demuestran", "significativo"]))
+
+
+class References(unittest.TestCase):
+    """A manuscript's references are never rewritten: they go to the frame, byte for byte."""
+    ENTRY = "[1] A. Smith, B. Lee. Microgrid control with deep learning. IEEE Trans., 2021."
+
+    def _prose(self, text):
+        frame, paras = blocks.parse(text)
+        self.assertEqual(blocks.unparse(frame, paras), text)
+        return paras
+
+    def test_markdown_references_until_the_next_heading(self):
+        text = ("# Results\n\nProfit rose by 5.7%.\n\n## References\n\n" + self.ENTRY +
+                "\n\n1. Wang, C. (2022). Budgeted search. Energy.\n\n## Appendix A\n\n"
+                "The appendix is prose.\n")
+        self.assertEqual(self._prose(text), ["# Results", "Profit rose by 5.7%.", "## Appendix A",
+                                             "The appendix is prose."])
+
+    def test_plain_title_lines_in_english_and_spanish(self):
+        for title in ("REFERENCES", "6. References", "Bibliografía", "Referencias bibliográficas:",
+                      "**Bibliography**", "Works Cited"):
+            text = "The paper ends here.\n\n" + title + "\n\n" + self.ENTRY + "\n"
+            self.assertEqual(self._prose(text), ["The paper ends here."], title)
+
+    def test_a_thesis_chapter_after_its_references_is_rewritten(self):
+        text = ("Chapter two ends.\n\nReferences\n\n" + self.ENTRY +
+                "\n\nChapter 3\n\nThe third chapter is prose.\n")
+        self.assertEqual(self._prose(text), ["Chapter two ends.", "Chapter 3",
+                                             "The third chapter is prose."])
+
+    def test_a_paragraph_that_mentions_references_is_not_a_heading(self):
+        text = "The references in this field are few, and most are old.\n\nMore prose.\n"
+        self.assertEqual(len(self._prose(text)), 2)
+
+    def test_rewrite_leaves_the_references_alone(self):
+        text = "Profit rose by 5.7% at the plant.\n\n## References\n\n" + self.ENTRY + "\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nsys.stdout.write(' went up by 5.7% at the plant floor.\\n</target_text>')\n")
+            src, out = os.path.join(tmp, "in.md"), os.path.join(tmp, "out.md")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write(text)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                    "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertTrue(read(out).endswith("## References\n\n" + self.ENTRY + "\n"), read(out))
+            self.assertIn("Paragraph 1 of 1", r.stdout)
 
 
 class Latex(unittest.TestCase):
@@ -1218,99 +1882,502 @@ class Convert(unittest.TestCase):
             self.assertIn("goes to text first", r.stderr)
 
 
-class Prose(unittest.TestCase):
-    """The Claude pipeline: the agent rewrites the units of a work file; import guards them."""
+class Clean(unittest.TestCase):
+    """Step 4a: the agent edits the slop out of a work file; import is the gate."""
+    SLOP = ("Moreover, our framework plays a crucial role in the evolving landscape of microgrid "
+            "control. It is not just a scheduler, but a testament to what reinforcement learning "
+            "can achieve. Profit rose by 5.7% at B = 3, with a 95% CI of -0.7 to +2.8.")
+    PLAIN = ("The supervisor reads the scored history and proposes a directive for the day. The "
+             "agents follow it until an event notice arrives, and then the supervisor is called "
+             "again with the new state of the plant.")
+    GOOD = ("Our framework controls a microgrid. It schedules the plant, and shows what "
+            "reinforcement learning can do there. Profit rose by 5.7% at B = 3, with a 95% CI "
+            "of -0.7 to +2.8.")
 
-    def _export(self, tmp, src_text, ext):
-        src = os.path.join(tmp, "00-original" + ext)
+    def _run(self, original, edits, ext=".txt", concepts="microgrid\nreinforcement learning\n"):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        src, work, out, conc = (os.path.join(tmp, n) for n in
+                                ("00-original" + ext, "00-slop.txt", "00-clean" + ext, "c.txt"))
         with open(src, "w", encoding="utf-8") as fh:
-            fh.write(src_text)
-        work = os.path.join(tmp, "01-prose.txt")
-        r = run(sys.executable, script("prose.py"), "export", src, "-o", work)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        return src, work
+            fh.write(original)
+        with open(conc, "w", encoding="utf-8") as fh:
+            fh.write(concepts)
+        r = run(sys.executable, script("clean.py"), "export", src, "-o", work)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        text = read(work)
+        for old, new in edits:
+            self.assertIn(old, text)
+            text = text.replace(old, new)
+        with open(work, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        r = run(sys.executable, script("clean.py"), "import", src, work, "-o", out, "--concepts", conc)
+        return r, (read(out) if os.path.exists(out) else None)
 
-    def _import(self, tmp, src, work, *extra):
-        out = os.path.join(tmp, "02-final" + os.path.splitext(src)[1])
-        r = run(sys.executable, script("prose.py"), "import", src, work, "-o", out, *extra)
-        return r, (read(out) if os.path.exists(out) else "")
+    def test_a_cleanup_of_the_slop_passes_and_keeps_the_rest(self):
+        original = "# Results\n\n" + self.SLOP + "\n\n" + self.PLAIN + "\n"
+        r, out = self._run(original, [(self.SLOP, self.GOOD)])
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(out, "# Results\n\n" + self.GOOD + "\n\n" + self.PLAIN + "\n")
+        self.assertIn("tells score", r.stdout)
+        self.assertIn("2  - Moreover, our framework plays a crucial role", r.stdout)
+        self.assertIn("+ Our framework controls a microgrid. It schedules", r.stdout)
+        self.assertEqual(clean.changed_sentences("A b. C d. E f.", "A b. X y. E f."), [("C d.", "X y.")])
 
-    def test_export_holds_only_the_prose(self):
-        md = ("# Title\n\nRemote work grew fast in 2020 across all the regions.\n\n```\ncode 1\n```\n\n"
-              "- A first bullet that has enough words to rewrite.\n- Short one\n")
+    def test_a_dropped_minus_or_lost_concept_writes_nothing(self):
+        original = self.SLOP + "\n\n" + self.PLAIN + "\n"
+        r, out = self._run(original, [(self.SLOP, self.GOOD.replace("-0.7", "0.7"))])
+        self.assertEqual(r.returncode, 1)
+        self.assertIsNone(out)
+        self.assertIn("lost -0.7", r.stdout)
+        r, out = self._run(original, [(self.SLOP, self.GOOD.replace("a microgrid", "the plant"))])
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("concept lost: microgrid", r.stdout)
+
+    def test_a_rewrite_is_not_a_cleanup(self):
+        original = self.SLOP + "\n\n" + self.PLAIN + "\n"
+        rewritten = ("A microgrid needs control, and ours does it with reinforcement learning, "
+                     "which pays: at B = 3 profit went up 5.7% (95% CI -0.7 to +2.8).")
+        r, out = self._run(original, [(self.SLOP, rewritten)])
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("only the slop, at most 50%", r.stdout)
+        self.assertIsNone(out)
+
+    def test_the_whole_text_has_a_limit_too(self):
+        a = ("The plant runs every hour. The supervisor picks a directive. Profit rose by 5.7% "
+             "in the microgrid test.")
+        b = ("Each hour the plant runs. A directive is picked by the supervisor. In the "
+             "microgrid test profit went up by 5.7%.")
+        r, out = self._run(a + "\n", [(a, b)], concepts="microgrid\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+
+    def test_latex_placeholders_must_stay(self):
+        tex = ("\\documentclass{article}\n\\begin{document}\n"
+               "Moreover, the method plays a crucial role in microgrid control~\\cite{a}, with "
+               "$p = 0.24$ and a gain that we measured on every one of the thirty teams.\n"
+               "\\end{document}\n")
+        r, out = self._run(tex, [("Moreover, the method plays a crucial role in", "The method matters for")],
+                           ext=".tex", concepts="microgrid\n")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("The method matters for microgrid control~\\cite{a}", out)
+        self.assertIn("$p = 0.24$", out)
+        self.assertTrue(out.startswith("\\documentclass{article}"))
+        r, out = self._run(tex, [("control [1]", "control")], ext=".tex", concepts="microgrid\n")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIsNone(out)
+
+    def test_spanish_is_left_to_the_base_model(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        src = os.path.join(tmp, "es.txt")
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write("Además, el marco juega un papel crucial en el control de la microrred y "
+                     "de la planta, que es lo que el estudio quiere mostrar.\n")
+        r = run(sys.executable, script("clean.py"), "export", src, "-o", os.path.join(tmp, "w.txt"))
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("for English text", r.stderr)
+
+
+W_NS = ('xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"')
+W_STYLES = (
+    '<w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>'
+    '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/>'
+    '<w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style>'
+    '<w:style w:type="paragraph" w:styleId="Capitulo"><w:name w:val="Capítulo de tesis"/>'
+    '<w:basedOn w:val="Heading1"/></w:style>'
+    '<w:style w:type="paragraph" w:styleId="Caption"><w:name w:val="caption"/></w:style>'
+    '<w:style w:type="paragraph" w:styleId="TOC1"><w:name w:val="toc 1"/></w:style>'
+    '<w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/></w:style>'
+    '<w:style w:type="paragraph" w:styleId="SourceCode"><w:name w:val="Source Code"/></w:style>')
+W_ITALIC = '<w:r><w:rPr><w:i/></w:rPr><w:t>in situ</w:t></w:r>'
+W_FIELD = ('<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ADDIN '
+           'ZOTERO_ITEM CSL_CITATION {} </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/>'
+           '</w:r><w:r><w:t>(Smith, 2020)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>')
+W_NOTE = '<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="1"/></w:r>'
+W_LINK = '<w:hyperlink r:id="rId9"><w:r><w:t>the dataset</w:t></w:r></w:hyperlink>'
+W_RICH = ('<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:bookmarkStart w:id="0" w:name="_Ref1"/>'
+          '<w:r><w:t xml:space="preserve">Measurements taken </w:t></w:r>' + W_ITALIC +
+          '<w:proofErr w:type="spellStart"/><w:r><w:t xml:space="preserve"> show that the supervisor cuts '
+          'costs by 12% </w:t></w:r><w:proofErr w:type="spellEnd"/>' + W_FIELD +
+          '<w:r><w:t xml:space="preserve">, and </w:t></w:r>' + W_LINK +
+          '<w:r><w:t xml:space="preserve"> confirms it for 30 plants.</w:t></w:r>' + W_NOTE +
+          '<w:bookmarkEnd w:id="0"/></w:p>')
+# A stand-in for llama.cpp on Word text: a few swaps, every placeholder kept. A source of
+# more than 150 words gets a cut-off answer, so a long paragraph is redone in parts.
+W_FAKE = (
+    "import os, sys\n"
+    "args = sys.argv[1:]\n"
+    "prompt = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+    "src = prompt.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+    "lead = prompt.split('<target_text>\\n')[1]\n"
+    "if len(src.split()) > 150:\n"
+    "    out = ' and nothing else.'\n"
+    "else:\n"
+    "    out = src\n"
+    "    for a, b in (('cuts', 'reduces'), ('show that', 'find that'), (' rose', ' went up')):\n"
+    "        out = out.replace(a, b)\n"
+    "    if os.environ.get('FAKE_REDO'):\n"
+    "        out = out.replace('budget', 'allowance')\n"
+    "    out = ' ' + ' '.join(out.split()[len(lead.split()):])\n"
+    "sys.stdout.buffer.write((out + '\\n</target_text>').encode('utf-8'))\n")
+
+
+def w_para(text, style=None):
+    ppr = f'<w:pPr><w:pStyle w:val="{style}"/></w:pPr>' if style else ""
+    return f'<w:p>{ppr}<w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
+
+
+W_TYPES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.'
+           'openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType='
+           '"application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" '
+           'ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/>'
+           '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-'
+           'officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" '
+           'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+           '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-'
+           'officedocument.wordprocessingml.footnotes+xml"/></Types>')
+W_RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://'
+          'schemas.openxmlformats.org/package/2006/relationships">{}</Relationships>')
+W_REL = ('<Relationship Id="{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+         'relationships/{}" Target="{}"{}/>')
+
+
+def make_docx(path, body):
+    """A Word file built with zipfile alone: the parts the scripts read, and parts they
+    must copy byte for byte."""
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("[Content_Types].xml", W_TYPES)
+        z.writestr("_rels/.rels", W_RELS.format(W_REL.format("rId1", "officeDocument",
+                                                             "word/document.xml", "")))
+        z.writestr("word/_rels/document.xml.rels", W_RELS.format(
+            W_REL.format("rId9", "hyperlink", "https://example.org/data", ' TargetMode="External"')
+            + W_REL.format("rId2", "footnotes", "footnotes.xml", "")))
+        z.writestr("word/document.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+                   f'<w:document {W_NS}><w:body>{body}<w:sectPr/></w:body></w:document>')
+        z.writestr("word/styles.xml", f'<?xml version="1.0" encoding="UTF-8"?><w:styles {W_NS}>'
+                   f'{W_STYLES}</w:styles>')
+        z.writestr("word/footnotes.xml", f'<?xml version="1.0" encoding="UTF-8"?><w:footnotes {W_NS}>'
+                   '<w:footnote w:id="1"><w:p><w:r><w:t>A note of 2019.</w:t></w:r></w:p></w:footnote>'
+                   '</w:footnotes>')
+        z.writestr("word/media/image1.png", b"\x89PNG\r\n\x1a\n not really")
+
+
+class Word(unittest.TestCase):
+    BODY = (w_para("Introduction", "Heading1") + W_RICH
+            + w_para("A plain paragraph of body text that the model rewrites, with words enough.")
+            + w_para("Figure 1. The plant layout.", "Caption")
+            + w_para("Introduction ........ 1", "TOC1")
+            + w_para("Quoted words stay exactly as the author wrote them in the source.", "Quote")
+            + w_para("x = run(plant)", "SourceCode")
+            + '<w:p><w:r><w:t xml:space="preserve">A sentence with </w:t></w:r><w:ins w:id="5" w:author="A">'
+              '<w:r><w:t>a tracked insertion</w:t></w:r></w:ins><w:r><w:t xml:space="preserve"> in it.'
+              '</w:t></w:r></w:p>'
+            + '<w:p><w:r><w:rPr><w:b/><w:rPrChange w:id="6" w:author="A"><w:rPr/></w:rPrChange></w:rPr>'
+              '<w:t>Bold that a reviewer added, tracked as a formatting change.</w:t></w:r></w:p>'
+            + '<w:p><w:commentRangeStart w:id="1"/><w:r><w:t>A paragraph with a comment on it, left '
+              'for the author.</w:t></w:r><w:commentRangeEnd w:id="1"/></w:p>'
+            + '<w:p><m:oMathPara><m:oMath><m:r><m:t>E=mc^2</m:t></m:r></m:oMath></m:oMathPara></w:p>'
+            + '<w:p/>'
+            + w_para("Chapter text in a style based on Heading 1", "Capitulo")
+            + '<w:tbl><w:tr><w:tc>' + w_para("A table cell is never rewritten, whatever it says.")
+            + '</w:tc></w:tr></w:tbl>'
+            + '<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/></w:docPartObj>'
+              '</w:sdtPr><w:sdtContent>' + w_para("Contents in a control of Word's own, kept.")
+            + '</w:sdtContent></w:sdt>'
+            + '<w:sdt><w:sdtPr><w:alias w:val="Abstract"/></w:sdtPr><w:sdtContent>'
+            + w_para("An abstract that a thesis template keeps in a content control is prose too.")
+            + '</w:sdtContent></w:sdt>'
+            + '<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>References</w:t></w:r></w:p>'
+            + w_para("Smith, J. (2020). Supervisors for plants. Energy, 9, 1–9.")
+            + w_para("Part, J. (2019).")
+            + w_para("Appendix A", "Heading1")
+            + w_para("The appendix is prose again and gets rewritten like the body was.")
+            + '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> ADDIN ZOTERO_BIBL '
+              '</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Wang, C. '
+              '(2021). Budgeted search for frozen controllers.</w:t></w:r></w:p>'
+            + '<w:p><w:r><w:t>Kim, D. (2020). Directive selection under uncertainty.</w:t></w:r>'
+              '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>')
+
+    def _docx(self, body=None):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp)
+        for f in (rewrite.BASE, rewrite.ADAPTER):
+            open(os.path.join(tmp, f), "w").close()
+        fake = os.path.join(tmp, "fake.py")
+        with open(fake, "w", encoding="utf-8") as fh:
+            fh.write(W_FAKE)
+        src = os.path.join(tmp, "00-original.docx")
+        make_docx(src, self.BODY if body is None else body)
+        env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+        return tmp, src, env
+
+    def test_only_prose_paragraphs_are_rewritten(self):
+        _, src, _ = self._docx()
+        why = [w for _, _, w in word.classify(word.read(src))]
+        self.assertEqual(why, [
+            "heading", None, None, "caption", "contents", "quotation", "code", "tracked changes",
+            "tracked changes", "comments", "equation", "empty", "heading",
+            None,                                    # the abstract in a content control
+            "heading", "bibliography", "bibliography",  # a bold «References» line starts it
+            "heading", None, "field", "field"])      # «Appendix A» ends it
+        frame, paras = blocks.parse(blocks.read(src), "docx")
+        self.assertEqual(len(paras), 4)
+        self.assertTrue(all(blocks.kind(p, "docx") == "prose" for p in paras))
+        self.assertIn("A table cell is never rewritten", "".join(frame))
+        self.assertEqual(word.kept_counts(word.read(src)),
+                         {"tracked changes": 2, "comments": 1, "field": 2})
+
+    def test_formatting_becomes_placeholders_and_comes_back(self):
+        visible, pieces = word.protect(W_RICH)
+        self.assertEqual(visible, "Measurements taken [1] show that the supervisor cuts costs by 12% "
+                                  "[2], and [3] confirms it for 30 plants.[4]")
+        self.assertIn("ZOTERO_ITEM", pieces[2])
+        self.assertIn("footnoteReference", pieces[4])
+        self.assertEqual(word.text_of(word.restore(visible, pieces)), word.text_of(W_RICH))
+        rewritten = "For 30 plants [3] confirms it: measurements [1] find costs 12% lower [2].[4]"
+        xml = word.restore(rewritten, pieces)
+        self.assertEqual(word.text_of(xml), "For 30 plants the dataset confirms it: measurements in situ "
+                                            "find costs 12% lower (Smith, 2020).")
+        for piece in (W_FIELD, W_LINK, '<w:footnoteReference w:id="1"/>', '<w:bookmarkStart w:id="0"'):
+            self.assertEqual(xml.count(piece), 1, piece)
+        self.assertNotIn("proofErr", xml)
+        self.assertEqual(word.problem(visible, rewritten.replace("[2]", ""), pieces), "(Word formatting changed)")
+        self.assertEqual(word.problem(visible, rewritten + " [2]", pieces), "(Word formatting changed)")
+        self.assertIsNone(word.restore(rewritten.replace("[4]", "[4][4]"), pieces))
+        # «[1]» typed in the text is text: the placeholders start after it
+        literal = '<w:p><w:r><w:t>As [1] says, it holds </w:t></w:r>' + W_ITALIC + '</w:p>'
+        visible, pieces = word.protect(literal)
+        self.assertEqual(visible, "As [1] says, it holds [2]")
+        self.assertEqual(word.text_of(word.restore("It holds [2], as [1] says.", pieces)),
+                         "It holds in situ, as [1] says.")
+
+    def test_a_piece_against_the_word_before_stays_against_it(self):
+        p = ('<w:p><w:r><w:t xml:space="preserve">Controllers win in simulation</w:t></w:r><w:r><w:rPr>'
+             '<w:vertAlign w:val="superscript"/></w:rPr><w:t>1</w:t></w:r><w:r><w:t xml:space="preserve">'
+             ', and costs fall.</w:t></w:r>' + W_NOTE + '</w:p>')
+        visible, pieces = word.protect(p)
+        self.assertEqual(visible, "Controllers win in simulation[1], and costs fall.[2]")
+        xml = word.restore("In simulation [1] controllers win, and costs fall. [2]", pieces)
+        self.assertEqual(word.text_of(xml), "In simulation1 controllers win, and costs fall.")
+        self.assertIn('fall.</w:t></w:r>' + W_NOTE.replace('<w:r><w:rPr>', '<w:r><w:rPr>'), xml)
+
+    def test_invisible_formatting_is_text_and_words_kept_out_are_reported(self):
+        """Language, ligatures and black set by hand do not show; a size set by hand on half
+        a pasted paragraph does, and keeps those words out of the rewrite: rewrite.py says so."""
+        p = ('<w:p><w:r><w:rPr><w:lang w:val="en-GB"/></w:rPr><w:t xml:space="preserve">Most of this '
+             'text is normal and the model rewrites it </w:t></w:r><w:r><w:rPr><w:sz w:val="20"/></w:rPr>'
+             '<w:t>but a pasted part in another size stays exactly as it was written here</w:t></w:r>'
+             '<w:r><w:rPr><w:color w:val="000000"/><w14:ligatures w14:val="standardContextual"/></w:rPr>'
+             '<w:t xml:space="preserve"> and black set by hand is plain text.</w:t></w:r></w:p>')
+        self.assertEqual(word.protect(p)[0], "Most of this text is normal and the model rewrites it [1] "
+                                             "and black set by hand is plain text.")
+        self.assertEqual(word.locked_share(p), (14, 33))
+        tmp, src, env = self._docx(w_para("Results", "Heading1") + p)
+        r = run(sys.executable, script("rewrite.py"), src, "-o", os.path.join(tmp, "out.docx"),
+                "--tries", "1", "--max-copied", "1", "--threads", "1", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("in a formatting of their own", r.stdout)
+        self.assertIn(": 1 (42%)", r.stdout)
+
+    def test_writing_keeps_every_other_part_byte_for_byte(self):
+        tmp, src, _ = self._docx()
+        out = os.path.join(tmp, "copy.docx")
+        xml = word.read(src)
+        word.write(out, xml.replace("plain paragraph", "short paragraph"), src)
+        with zipfile.ZipFile(src) as a, zipfile.ZipFile(out) as b:
+            self.assertEqual(a.namelist(), b.namelist())
+            for name in a.namelist():
+                if name != "word/document.xml":
+                    self.assertEqual(a.read(name), b.read(name), name)
+            self.assertIn(b"short paragraph", b.read("word/document.xml"))
+
+    def test_a_word_file_through_the_pipeline(self):
+        tmp, src, env = self._docx()
+        out, final = os.path.join(tmp, "01-rewritten.docx"), os.path.join(tmp, "02-final.docx")
+        r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "2",
+                "--max-copied", "1", "--threads", "1", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("2 paragraphs with tracked changes, 1 paragraphs with comments", r.stdout)
+        frame_a, paras_a = blocks.parse(blocks.read(src), "docx")
+        frame_b, paras_b = blocks.parse(blocks.read(out), "docx")
+        self.assertEqual(frame_a, frame_b)  # headings, tables, references, fields: untouched
+        rich = paras_b[0]
+        self.assertIn("the supervisor reduces costs by 12%", word.text_of(rich))
+        for piece in ('<w:i/>', W_FIELD, W_LINK, '<w:footnoteReference w:id="1"/>'):
+            self.assertEqual(rich.count(piece), 1, piece)
+        with zipfile.ZipFile(src) as a, zipfile.ZipFile(out) as b:
+            self.assertEqual(a.read("word/footnotes.xml"), b.read("word/footnotes.xml"))
+        r = run(sys.executable, script("check.py"), src, out)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("FIGURES: all", r.stdout)
+        r = run(sys.executable, script("join.py"), out, "-o", final, "--pauses", "2")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(blocks.parse(blocks.read(final), "docx")[0], frame_a)
+        sheet = os.path.join(tmp, "01-review.md")
+        r = run(sys.executable, script("review.py"), src, out, "-o", sheet)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("the supervisor reduces costs by 12% (Smith, 2020)", read(sheet))
+        r = run(sys.executable, script("tells.py"), src, out)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        work = os.path.join(tmp, "00-slop.txt")
+        r = run(sys.executable, script("clean.py"), "export", src, "-o", work)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("=== 1 ===\nMeasurements taken [1] show", read(work))
+
+    def test_a_long_word_paragraph_is_rewritten_in_parts(self):
+        sentences = [f"In week {n} the plant budget rose by {n}% and the supervisor kept every agent "
+                     f"on the same plan." for n in range(1, 13)]
+        sentences[1] = sentences[1].replace("the same plan.", "the same plan </w:t></w:r>" + W_ITALIC
+                                            + '<w:r><w:t xml:space="preserve">.')
+        sentences[6] = sentences[6].replace("plan.", "plan </w:t></w:r>" + W_FIELD
+                                            + '<w:r><w:t xml:space="preserve">.')
+        body = w_para("Results", "Heading1") + w_para(" ".join(sentences))
+        tmp, src, env = self._docx(body)
+        out = os.path.join(tmp, "01-rewritten.docx")
+        r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "2",
+                "--max-copied", "1", "--threads", "1", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("rewriting it in 3 parts", r.stdout)
+        paras = blocks.parse(blocks.read(out), "docx")[1]
+        self.assertEqual(len(paras), 1)  # one paragraph, as the original
+        text = word.text_of(paras[0])
+        self.assertEqual(text.count("went up"), 12)
+        self.assertEqual(paras[0].count(W_FIELD), 1)
+        self.assertEqual(paras[0].count("<w:i/>"), 1)
+        saved = json.loads(read(out + ".parts.json"))
+        self.assertEqual(len(saved["1"]["text"]), 3)
+        # a fix in part 1 keeps the record true, so part 2 can still be redone alone
+        r = run(sys.executable, script("fix.py"), out, "1", "week 1 the plant", "week 1 the factory")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--only", "1", "--part", "2",
+                "--tries", "1", "--max-copied", "1", "--threads", "1", env=dict(env, FAKE_REDO="1"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        text = word.text_of(blocks.parse(blocks.read(out), "docx")[1][0])
+        self.assertIn("week 1 the factory", text)
+        self.assertEqual(text.count("allowance"), 5)  # part 2: sentences 6 to 10
+        self.assertEqual(text.count("in situ"), 1)
+        self.assertEqual(text.count("(Smith, 2020)"), 1)
+
+
+    @unittest.skipUnless(convert.office() and CAN_READ_PDF, "needs LibreOffice and pdftotext")
+    def test_a_word_file_becomes_a_pdf_with_its_figures(self):
+        tmp, src, _ = self._docx()
+        pdf = os.path.join(tmp, "02-final.pdf")
+        r = run(sys.executable, script("convert.py"), src, "-o", pdf)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("12%", "".join(convert.pdf_pages(pdf)))
+
+
+class Server(unittest.TestCase):
+    """HUMANIZE_SERVER=1: the model is loaded once in llama-server, every try is a request."""
+
+    TEXT = ("The supervisor cuts costs on every line of the plant, day after day, as planned.\n\n"
+            "A second paragraph also cuts its words here and there, in the same old way.\n")
+
+    def _setup(self, server_code):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for f in (rewrite.BASE, rewrite.ADAPTER):
+            open(os.path.join(tmp, f), "w").close()
+        log = os.path.join(tmp, "log")
+        cli, server = os.path.join(tmp, "fake_cli.py"), os.path.join(tmp, "fake_server.py")
+        with open(cli, "w", encoding="utf-8") as fh:
+            fh.write("import sys\n"
+                     f"open({log!r}, 'a').write('cli\\n')\n"
+                     "args = sys.argv[1:]\n"
+                     "prompt = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                     "src = prompt.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+                     "lead = prompt.split('<target_text>\\n')[1]\n"
+                     "out = ' ' + ' '.join(src.replace('cuts', 'trims').split()[len(lead.split()):])\n"
+                     "sys.stdout.write(out + '\\n</target_text>')\n")
+        with open(server, "w", encoding="utf-8") as fh:
+            fh.write(server_code.replace("LOG", repr(log)))
+        src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(self.TEXT)
+        env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=cli, HUMANIZE_SERVER="1",
+                   HUMANIZE_LLAMA_SERVER=server)
+        r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                "--max-copied", "1", "--threads", "1", env=env)
+        return r, read(out), read(log).split()
+
+    def test_the_model_is_loaded_once_and_every_try_is_a_request(self):
+        fake = (
+            "import http.server, json, sys\n"
+            "args = sys.argv[1:]\n"
+            "open(LOG, 'a').write('start\\n')\n"
+            "class Handler(http.server.BaseHTTPRequestHandler):\n"
+            "    def log_message(self, *a):\n"
+            "        pass\n"
+            "    def answer(self, code, data):\n"
+            "        self.send_response(code)\n"
+            "        self.send_header('Content-Type', 'application/json')\n"
+            "        self.end_headers()\n"
+            "        self.wfile.write(json.dumps(data).encode('utf-8'))\n"
+            "    def do_GET(self):\n"
+            "        self.answer(200 if self.path == '/health' else 404, {'status': 'ok'})\n"
+            "    def do_POST(self):\n"
+            "        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))\n"
+            "        src = body['prompt'].split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+            "        lead = body['prompt'].split('<target_text>\\n')[1]\n"
+            "        open(LOG, 'a').write('request\\n')\n"
+            "        words = src.replace('cuts', 'reduces').split()[len(lead.split()):]\n"
+            "        self.answer(200, {'content': ' ' + ' '.join(words)})\n"
+            "port = int(args[args.index('--port') + 1])\n"
+            "http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()\n")
+        r, out, log = self._setup(fake)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Model loaded once in llama-server", r.stdout)
+        self.assertEqual(log, ["start", "request", "request"])  # never the CLI
+        self.assertEqual(out.count("reduces"), 2)
+
+    def test_a_server_that_does_not_start_leaves_every_try_to_llama_completion(self):
+        r, out, log = self._setup("import sys\nopen(LOG, 'a').write('start\\n')\nsys.exit(1)\n")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("did not start; every try runs llama-completion", r.stdout)
+        self.assertEqual(log, ["start", "cli", "cli"])
+        self.assertEqual(out.count("trims"), 2)
+
+
+class Fix(unittest.TestCase):
+    def test_one_to_three_words_in_one_paragraph(self):
         with tempfile.TemporaryDirectory() as tmp:
-            _, work = self._export(tmp, md, ".md")
-            body = read(work)
-            self.assertIn("=== 2 ===\nRemote work grew fast in 2020 across all the regions.", body)
-            self.assertIn("=== 4.1 ===\nA first bullet that has enough words to rewrite.", body)
-            self.assertNotIn("code 1", body)
-            self.assertNotIn("Short one", body)
-            self.assertNotIn("=== 1 ===", body)  # the heading
-            src, work = self._export(tmp, read(PAPER), ".tex")
-            self.assertEqual(len(re.findall(r"(?m)^=== ", read(work))), 8)
-            self.assertIn("plan collaboration [1]. As shown in Fig. [2]", read(work))
-
-    def test_an_unchanged_work_file_gives_the_paper_back_byte_for_byte(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            src, work = self._export(tmp, read(PAPER), ".tex")
-            r, out = self._import(tmp, src, work)
+            path = os.path.join(tmp, "01-rewritten.txt")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("The majority of workers stayed home.\n\nThey split their time, and most stayed.\n")
+            r = run(sys.executable, script("fix.py"), path, "1", "The majority of", "Many")
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertEqual(out, read(PAPER))
-            self.assertIn("unchanged", r.stdout)
-
-    def test_import_guards_every_unit(self):
-        text = ("Sales rose 5% in 2020 across the region, as \"the report clearly says\" here.\n\n"
-                "Microsoft Teams became the main tool for most of the remote teams we studied.\n\n"
-                "Read https://example.com/guide before you install the tool on your machine.\n\n"
-                "The survey covered 1,200 people in 14 firms over two full years of work.\n")
-        work_text = ("=== 1 ===\nIn 2020 sales went up 6% in the region, as \"the report clearly says\" here.\n\n"
-                     "=== 2 ===\nTeams became the tool most of the remote groups we looked at used.\n\n"
-                     "=== 3 ===\nRead https://example.org/guide before installing it on your computer.\n\n"
-                     "=== 4 ===\nAcross 14 firms, 1,200 people answered the survey over two whole years.\n")
-        with tempfile.TemporaryDirectory() as tmp:
-            src, work = self._export(tmp, text, ".txt")
-            with open(work, "w", encoding="utf-8") as fh:
-                fh.write(work_text)
-            conc = os.path.join(tmp, "c.txt")
-            with open(conc, "w", encoding="utf-8") as fh:
-                fh.write("Microsoft Teams\n")
-            r, out = self._import(tmp, src, work, "--concepts", conc)
-            self.assertEqual(r.returncode, 1, r.stdout)
-            self.assertIn("1 (figures lost 5; added 6)", r.stdout)
-            self.assertIn("2 Microsoft Teams", r.stdout)
-            self.assertIn("3 (link or code changed)", r.stdout)
-            self.assertIn("Across 14 firms, 1,200 people answered", out)  # 4 passed
-            self.assertIn("Sales rose 5% in 2020", out)  # 1 kept as the original
-            with open(work, "a", encoding="utf-8") as fh:
-                fh.write("\n=== 9 ===\nNo such unit.\n")
-            r, _ = self._import(tmp, src, work)
-            self.assertEqual(r.returncode, 2)
-            self.assertIn("units the original does not: 9", r.stderr)
-
-    def test_a_dropped_latex_placeholder_keeps_the_original(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            src, work = self._export(tmp, read(PAPER), ".tex")
-            body = read(work).replace("model [5], where [6] captures", "model, where [6] captures")
-            with open(work, "w", encoding="utf-8") as fh:
-                fh.write(body)
-            r, out = self._import(tmp, src, work)
+            self.assertEqual(read(path), "Many workers stayed home.\n\nThey split their time, and most "
+                                         "stayed.\n")
+            r = run(sys.executable, script("fix.py"), path, "2", "split their time", "were forced to "
+                    "work from home all week")
             self.assertEqual(r.returncode, 1)
-            self.assertIn("2 (LaTeX changed)", r.stdout)
-            self.assertIn("$y = \\alpha + \\beta x$", out)
+            self.assertIn("a fix is one to 3", r.stderr)
+            r = run(sys.executable, script("fix.py"), path, "2", "st", "x")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("2 times", r.stderr)
+            r = run(sys.executable, script("fix.py"), path, "3", "a", "b")
+            self.assertEqual(r.returncode, 2)
+        self.assertEqual(fix.changed_words("the majority", "many"), 2)
+        self.assertEqual(fix.changed_words("of workers", "of the workers"), 1)
 
-    def test_a_list_with_nothing_to_rewrite_keeps_its_lines(self):
-        md = "Intro text of this short document goes right here now.\n\n- Fast\n- Cheap and\n  simple\n"
+    def test_a_word_fix_changes_words_not_formatting(self):
         with tempfile.TemporaryDirectory() as tmp:
-            src, work = self._export(tmp, md, ".md")
-            r, out = self._import(tmp, src, work)
-            self.assertEqual(r.returncode, 0, r.stdout)
-            self.assertIn("- Cheap and\n  simple", out)
-
-    def test_join_only_touches_the_listed_paragraphs(self):
-        t = "One here. Two here.\n\nThree here. Four here.\n\nFive here. Six here.\n"
-        self.assertEqual(join.join_text(t, lang="en", only={2}),
-                         "One here. Two here.\n\nThree here and four here.\n\nFive here. Six here.\n")
-
+            path = os.path.join(tmp, "01-rewritten.docx")
+            make_docx(path, w_para("Introduction", "Heading1") + W_RICH)
+            r = run(sys.executable, script("fix.py"), path, "1", "--show")
+            self.assertIn("cuts costs by 12% [2], and [3]", r.stdout)
+            self.assertIn("[2] = «(Smith, 2020)»", r.stdout)
+            r = run(sys.executable, script("fix.py"), path, "1", "cuts costs", "lowers costs")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            p = blocks.parse(blocks.read(path), "docx")[1][0]
+            self.assertIn("the supervisor lowers costs by 12% (Smith, 2020)", word.text_of(p))
+            self.assertEqual(p.count(W_FIELD), 1)
+            r = run(sys.executable, script("fix.py"), path, "1", "12% [2],", "12%,")
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("keeps every [n]", r.stderr)
 
 class ModelDir(unittest.TestCase):
     def _put_model(self, directory):
@@ -1656,6 +2723,78 @@ class Installer(unittest.TestCase):
                     fh.write("import sys\nsys.stderr.write('load_backend: loaded CPU backend\\n')\n" + code)
                 with mock.patch.dict(os.environ, {"HUMANIZE_LLAMA": fake}):
                     self.assertEqual(install_model.gpu_devices(), expected, name)
+
+    def test_a_bigger_model_needs_its_own_adapter(self):
+        import install_model
+        with tempfile.TemporaryDirectory() as tmp:
+            lora, plain, base8, chat8, llama = (os.path.join(tmp, n) for n in
+                                                ("lora.gguf", "plain.gguf", "b8.gguf", "c8.gguf", "l.gguf"))
+            self._gguf(lora, [("general.architecture", 8, "qwen3"), ("adapter.type", 8, "lora")])
+            self._gguf(plain, [("general.architecture", 8, "qwen3"), ("general.name", 8, "Qwen3 8B Base")])
+            self._gguf(base8, [("general.architecture", 8, "qwen3"), ("general.name", 8, "Qwen3 8B Base"),
+                               ("qwen3.embedding_length", 4, 4096)])
+            self._gguf(chat8, [("general.architecture", 8, "qwen3"), ("general.name", 8, "Qwen3 8B"),
+                               ("qwen3.embedding_length", 4, 4096)])
+            self._gguf(llama, [("general.architecture", 8, "llama"), ("general.name", 8, "Meta Llama 3 8B"),
+                               ("llama.embedding_length", 4, 4096)])
+            self.assertEqual(install_model.check_adapter(lora), (None, "qwen3"))
+            self.assertIn("not a LoRA adapter", install_model.check_adapter(plain)[0])
+            self.assertEqual(install_model.check_base(base8, "qwen3"), (None, None))  # width 4096 is fine now
+            self.assertIn("needs Qwen3-4B", install_model.check_base(base8)[0])      # not with the 4B adapter
+            self.assertIn("your adapter is qwen3", install_model.check_base(llama, "qwen3")[0])
+            self.assertIn("not a base model", install_model.check_base(chat8, "qwen3")[1])
+            self.assertEqual(install_model.check_base(llama, "llama"), (None, None))  # Llama-3-8B base
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=sys.executable)
+            r = run(sys.executable, script("install_model.py"), "--no-test",
+                    env=dict(env, HUMANIZE_ADAPTER=lora))
+            self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+            self.assertIn("needs HUMANIZE_BASE_MODEL", r.stdout)
+            r = run(sys.executable, script("install_model.py"), "--no-test",
+                    env=dict(env, HUMANIZE_ADAPTER=lora, HUMANIZE_BASE_MODEL=base8))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)  # nothing to download
+            self.assertIn("Your adapter:", r.stdout)
+            self.assertEqual(install_model.bytes_missing(tmp, own_base=True, own_adapter=True), 0)
+
+    def test_rewrite_uses_the_adapter_you_point_to(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            own_base, own_adapter = (os.path.join(tmp, n) for n in ("b8.gguf", "a8.gguf"))
+            open(own_base, "w").close()
+            open(own_adapter, "w").close()
+            log = os.path.join(tmp, "args.txt")
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("import sys\nargs = sys.argv[1:]\n"
+                         f"open({log!r}, 'w').write(args[args.index('--lora') + 1])\n"
+                         "sys.stdout.write(' bla bla bla bla bla bla bla bla.\\n</target_text>')\n")
+            src = os.path.join(tmp, "in.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("Remote teams meet in person on fewer days than they did before now.\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake,
+                       HUMANIZE_BASE_MODEL=own_base, HUMANIZE_ADAPTER=own_adapter)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", os.path.join(tmp, "o.txt"),
+                    "--tries", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(read(log), own_adapter)
+
+    def test_the_installer_names_only_the_pinned_gpu(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for f in (rewrite.BASE, rewrite.ADAPTER):
+                open(os.path.join(tmp, f), "w").close()
+            fake = os.path.join(tmp, "fake.py")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("print('Available devices:')\nprint('  Vulkan0: Intel(R) Graphics (RPL-S)')\n"
+                         "print('  Vulkan1: NVIDIA GeForce RTX 5060 Laptop GPU')\n")
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake, HUMANIZE_GPU="1")
+            # skip the checksums of the empty stand-in files: only the summary is under test
+            code = ("import sys; sys.path.insert(0, %r); import install_model as m; "
+                    "m.download = lambda *a, **k: None; sys.argv = ['x', '--no-test']; "
+                    "sys.exit(m.main())" % SCRIPTS)
+            r = run(sys.executable, "-c", code, env=dict(env, HUMANIZE_GPU_DEVICE="Vulkan1"))
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("runs on: the GPU (Vulkan1: NVIDIA", r.stdout)
+            self.assertNotIn("Intel", r.stdout)
+            r = run(sys.executable, "-c", code, env=dict(env, HUMANIZE_GPU_DEVICE="Vulkan7"))
+            self.assertIn("HUMANIZE_GPU_DEVICE is Vulkan7", r.stdout)
 
     def test_a_file_that_does_not_match_is_set_aside_not_deleted(self):
         import contextlib

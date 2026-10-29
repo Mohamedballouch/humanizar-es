@@ -99,6 +99,29 @@ scored a 1914 text 100% AI). Then its number for your version means nothing. And
 the reference version again in the same session: don't compare with a number from hours
 before.
 
+## A/B test: does step 4a (cleanup before the model) help?
+
+Step 4a is not measured. It becomes the skill's default only if this test shows it helps.
+
+1. **One text, two arms.** Take one English AI text (300 to 1,400 words). Arm A: the
+   pipeline as it is (steps 5 to 8 on `00-original`). Arm B: step 4a first, then steps 5 to 8
+   on `00-clean`. Same `concepts.txt`, same `--pauses 2`, both arms on the same day. Save
+   `02-final-A.txt` and `02-final-B.txt`.
+2. **Same fixes.** Make only the 1–3-word fixes each arm's own review asks for, and count them:
+   more hand fixes in one arm would bias it.
+3. **One session, five texts.** In each detector, in one sitting: the human control, the AI
+   original, `00-clean` (cleaned but not rewritten), arm A and arm B. The two controls must
+   pass first (above). Paste each as the user will hand it in.
+4. **Record** in `references/evidence.md`, one row per detector: the five scores, the date,
+   the detector's model or version, the word count, the hand fixes per arm, and `tells.py`'s
+   total for A and B.
+5. **Read it honestly.** One text is a hint, not a result: B counts as better only if it beats
+   A in at least two detectors on at least two different texts, with neither control failing.
+   A tie keeps the default as it is (arm A costs one step less).
+
+`00-clean` on its own also tells you something: if it already passes a detector, the slop was
+what the detector saw; if it fails and arm B passes, the base model did the work.
+
 ## Other detectors
 
 They don't agree with each other: a version that passes one may not pass another. If you
