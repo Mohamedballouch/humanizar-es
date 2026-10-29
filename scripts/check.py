@@ -70,6 +70,35 @@ BOOSTERS = re.compile(r"(?<!\w)(?:clearly|prov(?:e|es|ed|en|ing)|demonstrat(?:e|
                       r"significativamente|sin duda|siempre)(?!\w)")
 
 
+COMPARE = r"(?:out-?perform|beat|surpass|exceed|outstrip|outdo|overtak|outpac|outrank|dominat)\w*"
+COMPARE_ACTIVE = re.compile(r"(?<!\w)" + COMPARE)
+COMPARE_PASSIVE = re.compile(r"(?<!\w)(?:is|are|was|were|be|been|being|gets?|got)\s+(?:\w+\s+){0,2}?"
+                             + COMPARE + r"\s+(?:[\w,-]+\s+){0,5}?by(?!\w)")
+OPPOSITES = (("superior", "inferior"), ("better", "worse"), ("outperform", "underperform"),
+             ("mejor", "peor"))  # word beginnings: «outperforms», «worsened»
+
+
+def comparison_changes(original, variant):
+    """What may have flipped a comparison: an active «outperform» that came back passive
+    («controllers are out-performed by rule based scheduling», in a real try that passed
+    every other check) or the other way round, and «superior» that became «inferior». The
+    new words can be right; who beats whom is what to read."""
+    o, v = norm(original), norm(variant)
+    out = []
+    po, pv = len(COMPARE_PASSIVE.findall(o)), len(COMPARE_PASSIVE.findall(v))
+    ao, av = len(COMPARE_ACTIVE.findall(o)) - po, len(COMPARE_ACTIVE.findall(v)) - pv
+    if pv > po and ao > 0:
+        out.append("active «%s» came back passive («… by»)" % COMPARE_ACTIVE.search(o).group(0))
+    elif pv < po and av > ao:
+        out.append("passive «… by» came back active")
+    has = lambda stem, t: re.search(r"(?<!\w)" + stem, t) is not None  # noqa: E731
+    for a, b in OPPOSITES:
+        for x, y in ((a, b), (b, a)):
+            if has(x, o) and not has(y, o) and has(y, v):
+                out.append(f"«{x}» became «{y}»")
+    return out
+
+
 def claim_changes(original, variant):
     """(hedges dropped, boosters added), as written, when the variant has fewer hedges or
     more boosters in all than the original: «may» -> «might» is the same claim, «may» -> «»
@@ -127,7 +156,10 @@ def _word(w):
 
 def pattern(term):
     """Whole word (optional plural), flexible spaces. With a trailing *, matches
-    by prefix. So "ser" does not match "servicio"."""
+    by prefix. So "ser" does not match "servicio". A term of two plain words also matches
+    the orders English moves it into: «outage cost*» finds «the cost of outages», and
+    «on-site microgrid» «microgrids on-site» (a real run lost 3 of 10 tries to those)."""
+    raw = term.strip()
     term = norm(term).strip()
     prefix = term.endswith("*")
     parts = [_word(p) for p in term.rstrip("*").split()]
@@ -136,7 +168,15 @@ def pattern(term):
     elif not prefix and parts[-1].endswith("z"):
         parts[-1] = parts[-1][:-1] + "(?:z|c(?=es))"  # luz, luces
     end = "" if prefix else r"(?:e?s)?(?!\w)"
-    return re.compile(r"(?<!\w)" + r"[\s-]+".join(parts) + end)
+    body = r"[\s-]+".join(parts) + end
+    words = raw.rstrip("*").split()
+    if len(words) == 2 and raw == raw.lower() and all(re.fullmatch(r"[a-z][a-z-]*", w) for w in words):
+        a, b = parts
+        moved = [b + (r"\w*" if prefix else r"(?:e?s)?") + r"\s+of\s+(?:the\s+|an?\s+)?" + a + r"(?:e?s)?(?!\w)"]
+        if "-" in words[0]:  # an adjective that also goes after the noun
+            moved.append(b + (r"\w*" if prefix else r"(?:e?s)?") + r"\s+" + a + r"(?!\w)")
+        body = "(?:" + "|".join([body] + moved) + ")"
+    return re.compile(r"(?<!\w)" + body)
 
 
 def load_concepts(path):
@@ -508,6 +548,18 @@ def main():
                   + (f" hedges dropped {', '.join(f'«{x}»' for x in hedges)}" if hedges else "")
                   + (";" if hedges and boosters else "")
                   + (f" added {', '.join(f'«{x}»' for x in boosters)}" if boosters else ""))
+    def flips_by_paragraph(a, b):
+        pa = [x for x in re.split(r"\n[ \t]*\n", a.strip()) if x.strip()]
+        pb = [x for x in re.split(r"\n[ \t]*\n", b.strip()) if x.strip()]
+        if len(pa) != len(pb):
+            return comparison_changes(a, b)
+        return [c for x, y in zip(pa, pb) for c in comparison_changes(x, y)]
+    flips = [(f, flips_by_paragraph(texts[args.original], texts[f])) for f in args.variants]
+    flips = [(f, c) for f, c in flips if c]
+    if flips:
+        print("\nCOMPARISONS that may have flipped (who outperforms whom? review.py shows where):")
+        for f, changes in flips:
+            print(f"  {short_name(f, 30)}: " + "; ".join(changes))
     if warnings:
         print("\nNEGATIONS from the original that no longer appear the same (review by hand):")
         print("  Many are legitimate rewordings. Look for the ones that change the meaning,")

@@ -581,6 +581,22 @@ def protect_terms(text, concepts):
     return "".join(out) + text[last:], terms
 
 
+YEAR_IN_SQUARE = re.compile(r"\[(" + check.YEAR + r"(?:[,;]\s*(?:pp?\.\s*)?\d+(?:[–-]\d+)?)?)\]")
+YEAR_IN_ROUND = re.compile(r"\((" + check.YEAR + r"(?:[,;]\s*(?:pp?\.\s*)?\d+(?:[–-]\d+)?)?)\)")
+
+
+def repair_brackets(shown, r):
+    """Two habits of HIP around placeholders, put right before any check: placeholders
+    written in round brackets (a real try wrote «(1)»… «(4)» for «[1]»… «[4]»), and a
+    cited year put in square ones («Wang [2021]», «Kim [2020, p.4]» for «(2020, p. 4)»).
+    A «(3)» the text already had is left alone."""
+    for k in {int(n) for n in latex.PLACEHOLDER.findall(shown)}:
+        if f"[{k}]" not in r and r.count(f"({k})") == 1 and f"({k})" not in shown:
+            r = r.replace(f"({k})", f"[{k}]")
+    years = {re.sub(r"\s+", "", m.group(1)): m.group(0) for m in YEAR_IN_ROUND.finditer(shown)}
+    return YEAR_IN_SQUARE.sub(lambda m: years.get(re.sub(r"\s+", "", m.group(1)), m.group(0)), r)
+
+
 def restore_terms(r, terms):
     """The try with its terms back, or None if one is missing or repeated. In one pass:
     «[2] … [1]» of the original are pieces 1 and 2, and putting «[2]» back for 1 before
@@ -614,7 +630,7 @@ def one_try(p, args, concepts, lang, lead=None):
         shown, cites = protect_citations(visible)
     if getattr(args, "protect_terms", False) and concepts:
         shown, terms = protect_terms(shown, concepts)
-    r = rewrite_paragraph(shown, args.threads, args.temperature, lead, lang)
+    r = repair_brackets(shown, rewrite_paragraph(shown, args.threads, args.temperature, lead, lang))
     if fmt != "latex" and "\\%" not in shown:
         r = r.replace("\\%", "%")  # HIP writes LaTeX's «\%» for a plain «%» now and then
     if fmt != "latex" and "$" not in shown:  # and «$B=3$» for a plain «B = 3»

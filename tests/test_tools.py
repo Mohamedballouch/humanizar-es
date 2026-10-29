@@ -277,6 +277,43 @@ class Check(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
 
 
+    def test_a_two_word_term_matches_the_orders_english_moves_it_into(self):
+        """A real run lost 3 of 10 tries to «the cost of outages» and «microgrids on-site»."""
+        for term, yes, no in (("outage cost*", ["outage costs", "the cost of outages", "cost of an outage"],
+                               ["costs outage", "outage time"]),
+                              ("on-site microgrid", ["onsite microgrids", "microgrids on-site",
+                                                     "microgrids on site"], ["microgrids at the site"]),
+                              ("Microsoft Teams", ["Microsoft Teams"], ["Teams of Microsoft"])):
+            for t in yes:
+                self.assertTrue(check.pattern(term).search(check.norm(t)), (term, t))
+            for t in no:
+                self.assertFalse(check.pattern(term).search(check.norm(t)), (term, t))
+
+    def test_a_comparison_that_may_have_flipped(self):
+        o = "Deep reinforcement learning controllers [2] outperform rule-based schedules in simulation."
+        inverted = "Deep reinforcement learning controllers are out-performed by rule based scheduling [2]."
+        self.assertEqual(check.comparison_changes(o, inverted), ["active «outperform» came back passive («… by»)"])
+        self.assertEqual(check.comparison_changes(o, o.replace("outperform", "beat")), [])
+        self.assertEqual(check.comparison_changes("A is superior to B.", "A is inferior to B."),
+                         ["«superior» became «inferior»"])
+        self.assertEqual(check.comparison_changes("B is outperformed by A.", "A outperforms B."),
+                         ["passive «… by» came back active"])
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = os.path.join(tmp, "a.txt"), os.path.join(tmp, "b.txt")
+            with open(a, "w", encoding="utf-8") as fh:
+                fh.write(o + "\n")
+            with open(b, "w", encoding="utf-8") as fh:
+                fh.write(inverted + "\n")
+            c = os.path.join(tmp, "concepts.txt")
+            with open(c, "w", encoding="utf-8") as fh:
+                fh.write("reinforcement learning\n")
+            r = run(sys.executable, script("check.py"), a, b, "--concepts", c)
+            self.assertIn("COMPARISONS that may have flipped", r.stdout)
+            sheet = os.path.join(tmp, "sheet.md")
+            run(sys.executable, script("review.py"), a, b, "-o", sheet)
+            self.assertIn("FLAG: COMPARISON active «outperform» came back passive", read(sheet))
+
+
 class Join(unittest.TestCase):
     def test_joins_with_y_and_respects_names(self):
         t = ("Goku entrena todos los días. La serie lo muestra sin prisa. "
@@ -898,6 +935,17 @@ class Rewrite(unittest.TestCase):
         self.assertIn(("Wang (2021)", ["Wang"]), concepts)
         lost = rewrite.concepts_in(t, concepts) - rewrite.concepts_in(t.replace("Wang ", ""), concepts)
         self.assertEqual(lost, {"Wang (2021)"})
+
+    def test_brackets_the_model_swapped_are_put_back(self):
+        """A real try wrote «(1)»… «(4)» for the placeholders, others «Wang [2021]»."""
+        shown = ("Costs fall [1]. Controllers [2] win, though Wang (2021) and Kim (2020, p. 4) "
+                 "disagree; a list (3) stays.")
+        self.assertEqual(rewrite.repair_brackets(shown, "Costs fall (1). Controllers (2) win; Wang [2021] "
+                                                        "and Kim [2020, p.4] disagree, a list (3) stays."),
+                         "Costs fall [1]. Controllers [2] win; Wang (2021) and Kim (2020, p. 4) disagree, "
+                         "a list (3) stays.")
+        self.assertEqual(rewrite.repair_brackets(shown, "Costs fall [1], [2] win; Wang [2022] says."),
+                         "Costs fall [1], [2] win; Wang [2022] says.")  # another year is not repaired
 
     def test_citations_out_of_order_come_back_in_place(self):
         """«[2] … [1]» become pieces 1 and 2: putting them back one after the other swapped them."""
@@ -1921,17 +1969,38 @@ def w_para(text, style=None):
     return f'<w:p>{ppr}<w:r><w:t xml:space="preserve">{text}</w:t></w:r></w:p>'
 
 
+W_TYPES = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.'
+           'openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType='
+           '"application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" '
+           'ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/>'
+           '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-'
+           'officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" '
+           'ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>'
+           '<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-'
+           'officedocument.wordprocessingml.footnotes+xml"/></Types>')
+W_RELS = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://'
+          'schemas.openxmlformats.org/package/2006/relationships">{}</Relationships>')
+W_REL = ('<Relationship Id="{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/'
+         'relationships/{}" Target="{}"{}/>')
+
+
 def make_docx(path, body):
     """A Word file built with zipfile alone: the parts the scripts read, and parts they
     must copy byte for byte."""
     with zipfile.ZipFile(path, "w") as z:
-        z.writestr("[Content_Types].xml", '<?xml version="1.0"?><Types xmlns="http://schemas.'
-                   'openxmlformats.org/package/2006/content-types"/>')
+        z.writestr("[Content_Types].xml", W_TYPES)
+        z.writestr("_rels/.rels", W_RELS.format(W_REL.format("rId1", "officeDocument",
+                                                             "word/document.xml", "")))
+        z.writestr("word/_rels/document.xml.rels", W_RELS.format(
+            W_REL.format("rId9", "hyperlink", "https://example.org/data", ' TargetMode="External"')
+            + W_REL.format("rId2", "footnotes", "footnotes.xml", "")))
         z.writestr("word/document.xml", '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
                    f'<w:document {W_NS}><w:body>{body}<w:sectPr/></w:body></w:document>')
         z.writestr("word/styles.xml", f'<?xml version="1.0" encoding="UTF-8"?><w:styles {W_NS}>'
                    f'{W_STYLES}</w:styles>')
-        z.writestr("word/footnotes.xml", "<w:footnotes>a note</w:footnotes>")
+        z.writestr("word/footnotes.xml", f'<?xml version="1.0" encoding="UTF-8"?><w:footnotes {W_NS}>'
+                   '<w:footnote w:id="1"><w:p><w:r><w:t>A note of 2019.</w:t></w:r></w:p></w:footnote>'
+                   '</w:footnotes>')
         z.writestr("word/media/image1.png", b"\x89PNG\r\n\x1a\n not really")
 
 
@@ -2024,6 +2093,16 @@ class Word(unittest.TestCase):
         self.assertEqual(word.text_of(word.restore("It holds [2], as [1] says.", pieces)),
                          "It holds in situ, as [1] says.")
 
+    def test_a_piece_against_the_word_before_stays_against_it(self):
+        p = ('<w:p><w:r><w:t xml:space="preserve">Controllers win in simulation</w:t></w:r><w:r><w:rPr>'
+             '<w:vertAlign w:val="superscript"/></w:rPr><w:t>1</w:t></w:r><w:r><w:t xml:space="preserve">'
+             ', and costs fall.</w:t></w:r>' + W_NOTE + '</w:p>')
+        visible, pieces = word.protect(p)
+        self.assertEqual(visible, "Controllers win in simulation[1], and costs fall.[2]")
+        xml = word.restore("In simulation [1] controllers win, and costs fall. [2]", pieces)
+        self.assertEqual(word.text_of(xml), "In simulation1 controllers win, and costs fall.")
+        self.assertIn('fall.</w:t></w:r>' + W_NOTE.replace('<w:r><w:rPr>', '<w:r><w:rPr>'), xml)
+
     def test_writing_keeps_every_other_part_byte_for_byte(self):
         tmp, src, _ = self._docx()
         out = os.path.join(tmp, "copy.docx")
@@ -2102,6 +2181,15 @@ class Word(unittest.TestCase):
         self.assertEqual(text.count("allowance"), 5)  # part 2: sentences 6 to 10
         self.assertEqual(text.count("in situ"), 1)
         self.assertEqual(text.count("(Smith, 2020)"), 1)
+
+
+    @unittest.skipUnless(convert.office() and CAN_READ_PDF, "needs LibreOffice and pdftotext")
+    def test_a_word_file_becomes_a_pdf_with_its_figures(self):
+        tmp, src, _ = self._docx()
+        pdf = os.path.join(tmp, "02-final.pdf")
+        r = run(sys.executable, script("convert.py"), src, "-o", pdf)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("12%", "".join(convert.pdf_pages(pdf)))
 
 
 class Fix(unittest.TestCase):

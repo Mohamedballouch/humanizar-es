@@ -4,15 +4,18 @@
   python3 scripts/review.py 00-original.txt 01-rewritten.txt --concepts concepts.txt -o 01-review.md
 
 In every real run so far the checks passed and reading still found an error: an inversion
-(«made after» -> «generated without having seen»), an invented count («teams of three
-agents»), a mechanism turned into a measurement, a claim made firmer («no significant
-difference»), a garbled sentence. This sheet makes that reading complete. For each prose
+(«made after» -> «generated without having seen»; «controllers outperform rule-based
+schedules» -> «controllers are out-performed by rule based scheduling»), an invented count
+(«teams of three agents»), a mechanism turned into a measurement, a claim made firmer («no
+significant difference»), a garbled sentence. This sheet makes that reading complete. For each prose
 paragraph it aligns the two versions sentence by sentence (one to one, two merged into one,
 one split in two, one dropped, one added) and flags each pair:
 
   FIGURES    a figure of the original lost, or one added, in this pair
   NEGATION   a negation added or lost («without», «no», «not»…)
   CLAIM      a hedge dropped («may», «suggests») or a booster added («significant»)
+  COMPARISON an «outperform» turned passive («outperformed by»), «superior» into
+             «inferior»: who beats whom may have flipped
   CONCEPT    a concept of concepts.txt missing from the rewritten paragraph
   DROPPED    an original sentence, or most of one, with no counterpart
   ADDED      a new sentence, or most of one, the original does not support
@@ -144,6 +147,9 @@ def flags_for(old, new, para):
         out.append("CLAIM " + "; ".join(x for x in (
             hedges and "hedge dropped " + ", ".join(f"«{x}»" for x in hedges),
             boosters and "added " + ", ".join(f"«{x}»" for x in boosters)) if x))
+    flips = check.comparison_changes(a, b)
+    if flips:
+        out.append("COMPARISON " + "; ".join(flips))
     missing = [c for c in para["concepts"]
                if any(check.pattern(v).search(check.norm(a)) for v in para["variants"][c])]
     if missing:

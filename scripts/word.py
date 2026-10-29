@@ -391,9 +391,13 @@ def protect(p):
             n += 1
             pieces[n] = value
             out.append(f"[{n}]")
-    pieces.meta = {"open": open_tag, "ppr": ppr, "rpr": base_rpr, "w": w,
+    visible = "".join(out)
+    # a piece written against the word before it (a superscript citation, a footnote mark
+    # after the period) stays against it: the model wrote «simulation [1]» for «simulation¹»
+    glued = [k for k in pieces if re.search(r"\S\[%d\]" % k, visible)]
+    pieces.meta = {"open": open_tag, "ppr": ppr, "rpr": base_rpr, "w": w, "glued": glued,
                    "start": "".join(zero_start), "end": "".join(zero_end)}
-    return "".join(out), pieces
+    return visible, pieces
 
 
 def problem(visible, rewritten, pieces):
@@ -413,6 +417,8 @@ def restore(rewritten, pieces):
     if any(len(re.findall(r"\[%d\]" % k, rewritten)) != 1 for k in pieces):
         return None
     meta = pieces.meta
+    for k in meta.get("glued", ()):
+        rewritten = re.sub(r"\s+(?=\[%d\])" % k, "", rewritten)
     w, out = meta["w"], [meta["open"], meta["ppr"], meta["start"]]
     pos = 0
     for m in re.finditer(r"\[(\d+)\]", rewritten):

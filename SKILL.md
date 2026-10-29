@@ -1,8 +1,8 @@
 ---
 name: humanize-research
-description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
+description: Rewrites AI-generated text and research papers (English or Spanish) so AI detectors read it as human, saying exactly the same thing: every figure, citation and quotation kept. A local base model without chat training (Qwen3-4B-Base + HIP, llama.cpp) rewrites each paragraph; scripts guard fidelity (concepts, figures, quotes, references, links, LaTeX placeholders), rebuild the rhythm (join.py --pauses 2), flag AI tells (tells.py) and select candidates for what a detector still flags. Measured at 0% in Grammarly, 0% in ZeroGPT and 0% AI in GPTZero on a test essay. Takes text, Markdown, LaTeX papers, Word theses and reports (.docx) and PDF (convert.py). Use when asked to "humanize" text or a paper, "make it not detectable as AI", "pass Grammarly/GPTZero/Turnitin", "remove AI tells", or in Spanish "humaniza este texto", "que no lo detecte el detector de IA".
 metadata:
-  version: "5.7.0"
+  version: "5.8.0"
   languages: en, es
   evidence: references/evidence.md
 ---
@@ -45,6 +45,18 @@ byte for byte, and inside a paragraph math, `\cite`, `\ref`, footnotes and every
 become placeholders `[1]`, `[2]`… that the rewrite must keep. Papers split into several
 files (`\input{intro}`) are done one file at a time.
 
+**A thesis or a report in Word** (`.docx`): copy it to `00-original.docx` and use `.docx`
+names in every step (`01-rewritten.docx`, `02-final.docx`). Only the prose paragraphs of the
+body are rewritten; headings, captions, the table of contents, the bibliography (by style,
+after a «References» heading or bold line, or a citation manager's field), quotations and
+code (by style), equations, tables, text boxes, footnotes, headers, images and styles stay
+byte for byte. Inside a paragraph, words in italics or bold, citation fields (Zotero,
+Mendeley, EndNote), cross-references, links, equations and footnote marks become
+placeholders `[1]`, `[2]`… that the rewrite must keep. Paragraphs with **tracked changes or
+comments are left as they are** (`rewrite.py` says how many): if they should be rewritten,
+have the user accept the changes and resolve the comments first. Footnote text is not
+rewritten.
+
 **A PDF**, only when there is no source (ask for the `.tex` or the Word file first: it is
 always the better input):
 
@@ -58,6 +70,12 @@ many figures it read; if it warns that a figure of the PDF is not in the text, f
 first. **Read `00-original.md` with the user before going on**: an extracted text can carry
 broken lines or table cells as prose. The PDF made back at the end has the same words in a
 plain layout, not the original's.
+
+**Citations** reach the model as placeholders in every format: `\cite` in LaTeX, a citation
+field in Word, and in text and Markdown «(Smith et al., 2020; Lee, 2019)», «[12], [14]–[16]»,
+footnote marks and inline math `$…$`. A narrative citation («Wang (2021) reports») stays
+words, since it is part of the sentence; its author is required like a concept and its
+year like any figure, so a try that drops either is not used.
 
 ### 2. Ask what it's for
 
@@ -249,7 +267,14 @@ that redoes it. Typical slips:
 - a sentence that doesn't make sense.
 
 Show the list to the user and fix **only the minimal culprit word or phrase**, with exact
-replacements in `01-rewritten.txt`. Don't rewrite whole sentences or polish style: every
+replacements in `01-rewritten.txt`. In a Word file make each fix with `fix.py` (it works on
+every format, and refuses a fix of more than three words or one that would move a
+placeholder); `--show` prints the paragraph as it sees it, with what each `[n]` stands for:
+
+```bash
+python3 <skill>/scripts/fix.py 01-rewritten.docx 4 "the majority" "many"
+```
+ Don't rewrite whole sentences or polish style: every
 word you add raises the detector score (in testing, 16 fixes moved an essay from 8% to
 10%). If it's just different but says the same thing, leave it.
 
@@ -302,8 +327,8 @@ with `--no-dashes` turns dashes between words (—, –, --) into commas. Use `-
 when the user's own writing doesn't use dashes; ask if you don't know. None of this is
 measured against detectors yet; it removes what readers notice.
 
-**Don't touch `02-final.txt` afterwards** except for those connector swaps: any fix goes into `01-rewritten.txt` and you
-join again.
+**Don't touch `02-final.txt` afterwards** except for those connector swaps (in Word, with
+`fix.py` on `02-final.docx`): any fix goes into `01-rewritten.txt` and you join again.
 
 ### 8. Verify and deliver
 
@@ -330,7 +355,9 @@ python3 <skill>/scripts/convert.py 02-final.md -o 02-final.pdf      # text from 
 ```
 
 It needs a LaTeX engine (TeX Live, MacTeX, MiKTeX or tectonic); without one, it says so and
-the `.tex` can be compiled on Overleaf. From text it reads the new PDF back and warns if a
+the `.tex` can be compiled on Overleaf. A Word file is delivered as `02-final.docx`, with its
+own layout: `convert.py 02-final.docx -o 02-final.pdf` makes the PDF when LibreOffice is
+installed, or the user saves it as PDF from Word. From text it reads the new PDF back and warns if a
 figure did not make it in. Warn
 that sentences stay longer than in a polished essay. If the text is over ~1,400 words, tell
 the user to measure it in Grammarly in two halves; GPTZero's free scan reads 10,000
@@ -420,9 +447,11 @@ risk before proceeding.
 - `scripts/join.py` — step 7: rebuild the rhythm of each paragraph (`--only`)
 - `scripts/clean.py` — step 4a: the cleanup work file out, and back in through the gate
 - `scripts/review.py` — step 6: each sentence of the original beside the rewrite's, flagged
+- `scripts/fix.py` — step 6: a fix of one to three words in one paragraph, in any format
 - `scripts/check.py` — concepts, negations and figures (counted), original against version
 - `scripts/latex.py` — LaTeX papers: what is prose, placeholders for math and commands
-- `scripts/convert.py` — PDF to text, text to PDF, LaTeX to PDF
+- `scripts/word.py` — Word files: what is prose, placeholders for formatting and fields
+- `scripts/convert.py` — PDF to text, text to PDF, LaTeX to PDF, Word to PDF
 - `scripts/blocks.py` — paragraphs and Markdown blocks (code, tables, lists), shared by all
 - `scripts/tells.py` — steps 6 and 9: tells of AI writing per paragraph, what to regenerate
 - `references/evidence.md` — every measurement
