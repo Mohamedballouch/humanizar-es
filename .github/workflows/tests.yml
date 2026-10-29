@@ -29,6 +29,6 @@ jobs:
           python -m pip install --quiet pyflakes
           python -m pyflakes install.py tests scripts/check.py scripts/join.py scripts/rewrite.py \
             scripts/tells.py scripts/blocks.py scripts/install_model.py scripts/latex.py \
-            scripts/convert.py scripts/clean.py scripts/review.py
+            scripts/convert.py scripts/clean.py scripts/review.py scripts/word.py scripts/fix.py
       - name: Tests
         run: python -m unittest discover -s tests -v

@@ -60,6 +60,7 @@ import check  # noqa: E402
 import join  # noqa: E402
 import latex  # noqa: E402
 import tells  # noqa: E402
+import word  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on «» or ñ
     sys.stdout.reconfigure(errors="replace")
@@ -376,6 +377,11 @@ def acceptable(p, r, wanted, concepts, max_copied, max_tells=None, lang="en"):
 is_title = tells.is_title
 
 
+def title_block(p, fmt="text"):
+    """A heading-like line («Fast setup», a Word paragraph of a few words): kept as it is."""
+    return is_title(blocks.prose_of(p, fmt) if fmt == "docx" else p)
+
+
 def short_item(text):
     """A list item too short to rewrite («Fast setup»). Longer bullets are rewritten even
     without a final period: most AI bullets are fragments of 6 to 12 words."""
@@ -441,21 +447,27 @@ def main():
             print(f"ERROR: {path} is missing; run scripts/install_model.py", file=sys.stderr)
             return 2
 
-    with open(args.original, encoding="utf-8-sig") as fh:
-        text = fh.read()
+    text = blocks.read(args.original)
     concepts = check.load_concepts(args.concepts) if args.concepts else []
     args.fmt = blocks.format_of(args.original)
+    args.template = args.original  # a Word output is rebuilt from this file's zip
     # an acronym's long form («large language model (LLM)») is a concept too
-    concepts = check.with_definitions(concepts, latex.plain(text) if args.fmt == "latex" else text)
+    concepts = check.with_definitions(concepts, blocks.plain(text, args.fmt))
+    if args.fmt == "docx":
+        kept_word = word.kept_counts(text)
+        if kept_word:
+            print("Left as they are in the Word file: " + ", ".join(
+                f"{n} paragraphs with {why}" for why, n in kept_word.items())
+                + ". Accept the tracked changes and resolve the comments first to have them rewritten.")
     frame, paragraphs = blocks.parse(text, args.fmt)
     lang = join.detect_language(" ".join(blocks.prose_of(b, args.fmt) for b in paragraphs))
     kept, kept_frame, only = None, None, None
     if args.resume and os.path.isfile(args.output) and not args.only:
-        with open(args.output, encoding="utf-8-sig") as fh:
-            done = blocks.parse(fh.read(), args.fmt)[1]
+        done = blocks.parse(blocks.read(args.output), args.fmt)[1]
         if len(done) == len(paragraphs):
             todo = [i for i, (a, b) in enumerate(zip(paragraphs, done), 1)
-                    if a == b and blocks.kind(a, args.fmt) in blocks.PROSE and not is_title(a)]
+                    if a == b and blocks.kind(a, args.fmt) in blocks.PROSE
+                    and not title_block(a, args.fmt)]
             print(f"Resuming: {len(paragraphs) - len(todo)} paragraphs kept, {len(todo)} to do")
             if not todo:
                 return 0
@@ -471,8 +483,8 @@ def main():
         if not os.path.isfile(args.output):
             print(f"ERROR: --only needs the existing {args.output}", file=sys.stderr)
             return 2
-        with open(args.output, encoding="utf-8-sig") as fh:
-            kept_frame, kept = blocks.parse(fh.read(), args.fmt)
+        kept_frame, kept = blocks.parse(blocks.read(args.output), args.fmt)
+        args.template = args.output  # keep what was changed in it since, other parts included
         if len(kept) != len(paragraphs):
             print(f"ERROR: {args.output} has {len(kept)} paragraphs and the original "
                   f"{len(paragraphs)}; --only needs the same count", file=sys.stderr)
@@ -499,6 +511,34 @@ def parse_only(spec, count):
               file=sys.stderr)
         return None
     return only
+
+
+# Citations and math of a text or Markdown manuscript reach the model as placeholders, as
+# \cite and $…$ do in LaTeX, where they held in every try of a real run: «(Smith et al.,
+# 2020; Lee, 2019)», «[12]», «[3–5, 9]», a footnote «[^2]», the «(2020)» of a narrative
+# «Smith (2020)», and inline math «$r_t = p_t q_t$» (pandoc's rule: no space inside the
+# dollars, no digit after the closing one, so «$5 and $10» is money) or «\(x\)».
+# A numbered cluster («[12], [14]–[16]») is one piece: alone, its dash came back as «--».
+# A narrative citation («Wang (2021) reports») is not a piece: it is part of the sentence,
+# and a lone «(2021)» lost its author («… are noisy (2021)»), a locked «Wang (2021)» its
+# grammar («… are noisy [3]»). Its authors are concepts instead (check.cited_authors).
+NUMBERED = r"\[\d+(?:\s*[,;–-]\s*\d+)*\]"
+CITATION = re.compile(
+    r"\[\^[^\]\s]+\]"
+    r"|" + NUMBERED + r"(?:\s*[,;–-]\s*" + NUMBERED + r")*"
+    r"|\((?=[^()]*[" + check.UPPER + r"][\w'’-])(?=[^()]*\b" + check.YEAR + r"\b)[^()]{3,250}\)"
+    r"|(?<![\w$\\])\$(?=\S)[^$\n]{1,200}?(?<=\S)\$(?!\d)"
+    r"|\\\(.{1,200}?\\\)")
+
+
+def protect_citations(text):
+    """(text with each citation and inline formula as «[n]», {n: what it stands for})."""
+    pieces, out, last = {}, [], 0
+    for m in CITATION.finditer(text):
+        pieces[len(pieces) + 1] = m.group(0)
+        out += [text[last:m.start()], f"[{len(pieces)}]"]
+        last = m.end()
+    return "".join(out) + text[last:], pieces
 
 
 def protect_terms(text, concepts):
@@ -542,13 +582,13 @@ def protect_terms(text, concepts):
 
 
 def restore_terms(r, terms):
-    """The try with its terms back, or None if one is missing or repeated."""
+    """The try with its terms back, or None if one is missing or repeated. In one pass:
+    «[2] … [1]» of the original are pieces 1 and 2, and putting «[2]» back for 1 before
+    replacing 2 would swap the citations."""
     for k in terms:
         if len(re.findall(r"\[%d\]" % k, r)) != 1:
             return None
-    for k, t in terms.items():
-        r = r.replace(f"[{k}]", t, 1)
-    return r
+    return re.sub(r"\[(\d+)\]", lambda m: terms.get(int(m.group(1)), m.group(0)), r)
 
 
 def one_try(p, args, concepts, lang, lead=None):
@@ -556,27 +596,49 @@ def one_try(p, args, concepts, lang, lead=None):
     or item p. In LaTeX the model sees the prose with placeholders; a try that breaks one
     is «(LaTeX changed)», and the text returned is the try put back in LaTeX. The checks
     read the plain prose, so a placeholder's number is not taken for a figure."""
-    if getattr(args, "fmt", "text") == "latex":
+    fmt = getattr(args, "fmt", "text")
+    if fmt == "latex":
         visible, pieces = latex.protect(p)
         plain_p = latex.strip_placeholders(visible)
+    elif fmt == "docx":
+        visible, pieces = word.protect(p)
+        plain_p = word.strip_placeholders(visible)
+    elif fmt == "marked":  # a run of a long Word paragraph: its placeholders are fixed
+        visible, plain_p = p, word.strip_placeholders(p)
+        pieces = {int(n): None for n in word.PLACEHOLDER.findall(p)}
     else:
         visible, pieces, plain_p = p, None, p
-    terms = {}
+    terms, cites = {}, {}
     shown = visible
+    if fmt != "latex":  # in LaTeX, \cite and math are placeholders already
+        shown, cites = protect_citations(visible)
     if getattr(args, "protect_terms", False) and concepts:
-        shown, terms = protect_terms(visible, concepts)
+        shown, terms = protect_terms(shown, concepts)
     r = rewrite_paragraph(shown, args.threads, args.temperature, lead, lang)
+    if fmt != "latex" and "\\%" not in shown:
+        r = r.replace("\\%", "%")  # HIP writes LaTeX's «\%» for a plain «%» now and then
+    if fmt != "latex" and "$" not in shown:  # and «$B=3$» for a plain «B = 3»
+        r = re.sub(r"\$([^$\n]{1,60})\$", r"\1", r)
     if terms:
         r = restore_terms(r, terms)
         if r is None:
             return "(term lost or repeated)", 0.0, None, None
-    if pieces is None and "\\%" not in visible:
-        r = r.replace("\\%", "%")  # HIP writes LaTeX's «\%» for a plain «%» now and then
-    if pieces is None and "$" not in visible:  # and «$B=3$» for a plain «B = 3»
-        r = re.sub(r"\$([^$\n]{1,60})\$", r"\1", r)
+    if cites:
+        r = restore_terms(r, cites)
+        if r is None:
+            return "(citation or formula lost or repeated)", 0.0, None, None
     r = restore_percent_signs(visible, r)
     if pieces is None:
         text, plain_r = r, r
+    elif fmt == "marked":
+        if word.problem(visible, r, pieces):
+            return "(Word formatting changed)", 0.0, None, None
+        text, plain_r = r, word.strip_placeholders(r)
+    elif fmt == "docx":
+        text = None if word.problem(visible, r, pieces) else word.restore(r, pieces)
+        if text is None:
+            return "(Word formatting changed)", 0.0, None, None
+        plain_r = word.strip_placeholders(r)
     else:
         text = None if latex.problem(visible, r, pieces) else latex.restore(r, pieces)
         if text is None:
@@ -615,6 +677,10 @@ def note(report, label, p, text, fallback, lost, lang, fmt="text"):
     """Adds what the user has to look at for one paragraph or item to the report."""
     if fallback and fmt == "latex":
         p, text = latex.plain(p), latex.plain(text)
+    elif fmt == "docx":
+        p, text = word.text_of(p), word.text_of(text)
+    elif fmt == "marked":
+        p, text = word.strip_placeholders(p), word.strip_placeholders(text)
     if fallback == "(copied)":
         report["copied"].append(f"{label} ({copied_share(p, text):.0%})")
     elif fallback == "(AI tells)":
@@ -635,13 +701,22 @@ AUTO_PARTS, AUTO_PARTS_WORDS = 150, 100  # a paragraph this long that fails is r
 AUTO_WHOLE_TRIES = 2  # a real 294-word abstract failed 6 of 6 whole tries: 10 minutes lost
 
 
+def word_count(p, fmt):
+    """Words of a paragraph as the model reads them (a Word paragraph's prose, not its XML)."""
+    return len((word.prose_of(p) if fmt == "docx" else p).split())
+
+
 def parts(p, fmt, max_words):
     """A long paragraph in runs of whole sentences of up to max_words words each (a longer
     sentence is a run alone), to be rewritten one by one and put back as ONE paragraph: the
     model loses terms on long paragraphs, and an abstract must stay a single paragraph.
-    [p] when it is short, or a LaTeX paragraph with a comment (a line end matters there)."""
-    if not max_words or len(p.split()) <= max_words:
+    [p] when it is short, or a LaTeX paragraph with a comment (a line end matters there).
+    A Word paragraph's runs are its prose with the placeholders in them; join_parts puts
+    the formatting back."""
+    if fmt == "marked" or not max_words or word_count(p, fmt) <= max_words:
         return [p]
+    if fmt == "docx":
+        p, fmt = word.protect(p)[0], "text"
     if fmt == "latex":
         if re.search(r"(?<!\\)%", p):
             return [p]
@@ -662,12 +737,30 @@ def parts(p, fmt, max_words):
     return runs
 
 
+def unit_args(args):
+    """The arguments for the runs of a paragraph: for Word, runs of prose with fixed
+    placeholders («marked»), not paragraphs of XML."""
+    if getattr(args, "fmt", "text") != "docx":
+        return args
+    sub = copy.copy(args)
+    sub.fmt = "marked"
+    return sub
+
+
+def join_parts(texts, p, fmt):
+    """The rewritten runs of paragraph p as one paragraph again; in Word, with the
+    paragraph's formatting and every piece back where its placeholder is."""
+    if fmt == "docx":
+        return word.restore(" ".join(texts), word.protect(p)[1])
+    return ("\n" if fmt == "latex" else " ").join(texts)
+
+
 def rewrite_block(i, p, args, concepts, lang, report):
     """(rewritten block, status) for block i. Code, tables, headings, quotations and
     titles stay; a list is rewritten item by item and keeps its markers."""
     fmt = getattr(args, "fmt", "text")
     k = blocks.kind(p, fmt)
-    if k not in blocks.PROSE or (k == "prose" and is_title(p)):
+    if k not in blocks.PROSE or (k == "prose" and title_block(p, fmt)):
         return p, f"kept ({'title' if k == 'prose' else k})"
     if k == "list":
         pairs, done, count = [], 0, 0
@@ -682,39 +775,41 @@ def rewrite_block(i, p, args, concepts, lang, report):
             pairs.append((marker, text))
         return blocks.rebuild(pairs, fmt), f"list, {done} of {count} items rewritten"
     runs = parts(p, fmt, getattr(args, "max_words", 0))
+    long_ = word_count(p, fmt) > AUTO_PARTS
     if len(runs) == 1:
         whole = args
-        if len(p.split()) > AUTO_PARTS:  # a long paragraph gets fewer whole tries, then parts
+        if long_:  # a long paragraph gets fewer whole tries, then parts
             whole = copy.copy(args)
             whole.tries = min(args.tries, AUTO_WHOLE_TRIES)
         text, n, fallback, lost = rewrite_unit(p, whole, concepts, lang, args.lead)
-        if text == p and len(p.split()) > AUTO_PARTS:  # a long paragraph kept losing terms
+        if text == p and long_:  # a long paragraph kept losing terms
             runs = parts(p, fmt, AUTO_PARTS_WORDS)
             if len(runs) > 1:
                 print(f"  paragraph {i}: left as the original in {n} tries; "
                       f"rewriting it in {len(runs)} parts", flush=True)
     if len(runs) > 1:
-        out = []
+        out, unit = [], unit_args(args)
         for j, run in enumerate(runs, 1):
-            text, _, fallback, lost = rewrite_unit(run, args, concepts, lang,
+            text, _, fallback, lost = rewrite_unit(run, unit, concepts, lang,
                                                    args.lead if j == 1 else None)
-            note(report, f"{i} (part {j})", run, text, fallback, lost, lang, fmt)
+            note(report, f"{i} (part {j})", run, text, fallback, lost, lang,
+                 getattr(unit, "fmt", "text"))
             out.append(text)
         done = sum(t != r for t, r in zip(out, runs))
         report.setdefault("parts", {})[str(i)] = {"source": runs, "text": out}
         for j, run in enumerate(runs, 1):
             print(f"  paragraph {i}, part {j}: «{' '.join(run.split()[:7])}…»"
                   + ("" if out[j - 1] != run else " (kept as the original)"), flush=True)
-        return ("\n" if fmt == "latex" else " ").join(out), \
-            f"one paragraph in {len(runs)} parts, {done} rewritten"
+        return join_parts(out, p, fmt), f"one paragraph in {len(runs)} parts, {done} rewritten"
     note(report, str(i), p, text, fallback, lost, lang, fmt)
     status = ("unchanged" if text == p else f"done, {FALLBACK_STATUS[fallback]} {n} tries"
               if fallback else f"done, try {n}" if n > 1 else "done")
     return text, status
 
 
-def part_to_redo(i, current, entry, args):
-    """(source run, its text now) of part --part of paragraph i, or None after saying why."""
+def part_to_redo(i, p, current, entry, args):
+    """(source run, its text now) of part --part of paragraph i, or None after saying why.
+    p is the original paragraph, which a Word paragraph's parts are put back into."""
     k = args.part
     if not entry:
         print(f"ERROR: paragraph {i} was not rewritten in parts (nothing in "
@@ -725,38 +820,56 @@ def part_to_redo(i, current, entry, args):
         print(f"ERROR: paragraph {i} has parts 1 to {len(entry['source'])}", file=sys.stderr)
         return None
     old = entry["text"][k - 1]
-    if old not in current:
+    if getattr(args, "fmt", "text") == "docx":
+        # Word's text is spread over runs: the paragraph must read as its parts do
+        if word.text_of(join_parts(entry["text"], p, "docx")) != word.text_of(current):
+            print(f"ERROR: paragraph {i} was changed since its parts were written (a fix made "
+                  f"outside fix.py?); redo the whole paragraph with --only {i}", file=sys.stderr)
+            return None
+    elif old not in current:
         print(f"ERROR: part {k} of paragraph {i} was changed by hand since it was written; "
               "undo that fix (it is being redone anyway) and run it again", file=sys.stderr)
         return None
     return entry["source"][k - 1], old
 
 
-def write_part_candidates(i, current, entry, args, concepts, lang):
+def with_part(current, p, entry, k, text, fmt):
+    """Paragraph `current` with the text of its part k replaced by `text`."""
+    if fmt == "docx":
+        texts = list(entry["text"])
+        texts[k - 1] = text
+        return join_parts(texts, p, fmt)
+    return current.replace(entry["text"][k - 1], text, 1)
+
+
+def write_part_candidates(i, p, current, entry, args, concepts, lang):
     """Up to N versions of one part, each saved as the whole paragraph with only that part
     replaced, so they are measured in context and adopted with --take like any other."""
-    got = part_to_redo(i, current, entry, args)
+    got = part_to_redo(i, p, current, entry, args)
     if got is None:
         return False
-    run, old = got
-    k = args.part
+    run, _ = got
+    k, fmt, unit = args.part, getattr(args, "fmt", "text"), unit_args(args)
     folder = args.output + ".candidates"
     os.makedirs(folder, exist_ok=True)
     found, tries, written = 0, 0, []
     while found < args.candidates and tries < args.candidates * args.tries:
         tries += 1
-        cand = one_candidate(run, args, concepts, lang)
+        cand = one_candidate(run, unit, concepts, lang)
         if cand is None:
             continue
         found += 1
         text = cand[0]
-        whole = current.replace(old, text, 1)
-        path = os.path.join(folder, f"p{i:02d}-part{k}-{found}.txt")
+        whole = with_part(current, p, entry, k, text, fmt)
+        path = os.path.join(folder, f"p{i:02d}-part{k}-{found}" + (".xml" if fmt == "docx" else ".txt"))
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(whole + "\n")
+        if fmt == "docx":  # the paragraph's XML is for --take; this is for reading and measuring
+            with open(path[:-4] + ".txt", "w", encoding="utf-8") as fh:
+                fh.write(word.text_of(whole) + "\n")
         with open(path + ".part.json", "w", encoding="utf-8") as fh:
             json.dump({"paragraph": i, "part": k, "text": text}, fh, ensure_ascii=False)
-        hits = tells.find(text, lang)
+        hits = tells.find(word.strip_placeholders(text) if fmt == "docx" else text, lang)
         written.append((sum(w for _, w, _ in hits), path))
         print(f"Paragraph {i}, part {k}: {path} (tells {written[-1][0]}): {text}", flush=True)
     if found < args.candidates:
@@ -764,19 +877,21 @@ def write_part_candidates(i, current, entry, args, concepts, lang):
     return True
 
 
-def redo_part(i, current, entry, args, concepts, lang, report):
+def redo_part(i, p, current, entry, args, concepts, lang, report):
     """(paragraph i with only part K regenerated, status), or (None, None) after saying
     why. The other parts keep their text and any hand fix made in them since."""
     k = args.part
-    got = part_to_redo(i, current, entry, args)
+    got = part_to_redo(i, p, current, entry, args)
     if got is None:
         return None, None
-    run, old = got
-    text, n, fallback, lost = rewrite_unit(run, args, concepts, lang, args.lead if k == 1 else None)
-    note(report, f"{i} (part {k})", run, text, fallback, lost, lang, getattr(args, "fmt", "text"))
+    run, _ = got
+    unit = unit_args(args)
+    text, n, fallback, lost = rewrite_unit(run, unit, concepts, lang, args.lead if k == 1 else None)
+    note(report, f"{i} (part {k})", run, text, fallback, lost, lang, getattr(unit, "fmt", "text"))
+    whole = with_part(current, p, entry, k, text, getattr(args, "fmt", "text"))
     entry["text"][k - 1] = text
     report.setdefault("parts", {})[str(i)] = entry
-    return current.replace(old, text, 1), f"part {k} of {len(entry['source'])} redone ({n} tries)"
+    return whole, f"part {k} of {len(entry['source'])} redone ({n} tries)"
 
 
 def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
@@ -794,19 +909,20 @@ def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
             output.append(kept[i - 1])
             continue
         if getattr(args, "part", None) is not None and args.candidates:
-            if not write_part_candidates(i, kept[i - 1], saved.get(str(i)), args, concepts, lang):
+            if not write_part_candidates(i, p, kept[i - 1], saved.get(str(i)), args, concepts, lang):
                 return 2
             output.append(kept[i - 1])
             continue
         if getattr(args, "part", None) is not None:
-            text, status = redo_part(i, kept[i - 1], saved.get(str(i)), args, concepts, lang, report)
+            text, status = redo_part(i, p, kept[i - 1], saved.get(str(i)), args, concepts,
+                                     lang, report)
             if text is None:
                 return 2
             output.append(text)
             print(f"Paragraph {i}: {status}", flush=True)
             continue
         if args.candidates:
-            if blocks.kind(p, fmt) in blocks.PROSE and not is_title(p):
+            if blocks.kind(p, fmt) in blocks.PROSE and not title_block(p, fmt):
                 write_candidates(args, i, p, concepts, lang)
             else:
                 print(f"Paragraph {i}: no candidates for a {blocks.kind(p, fmt)} or a title")
@@ -816,8 +932,9 @@ def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
         if str(i) not in report.get("parts", {}):
             saved.pop(str(i), None)  # rewritten whole: its old parts no longer apply
         output.append(text)
-        with open(args.output, "w", encoding="utf-8") as fh:  # saves after every paragraph
-            fh.write(blocks.unparse(frame, output + (kept or paragraphs)[i:]))
+        # saves after every paragraph
+        blocks.write(args.output, blocks.unparse(frame, output + (kept or paragraphs)[i:]),
+                     getattr(args, "template", None) or args.original)
         print(f"Paragraph {i} of {len(paragraphs)}: {status} ({time.time() - t0:.0f} s)", flush=True)
 
     if report.get("parts"):
@@ -826,8 +943,8 @@ def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
         with open(sidecar, "w", encoding="utf-8") as fh:
             json.dump(saved, fh, ensure_ascii=False, indent=1)
     if getattr(args, "part", None) is not None and not args.candidates:
-        with open(args.output, "w", encoding="utf-8") as fh:
-            fh.write(blocks.unparse(frame, output))
+        blocks.write(args.output, blocks.unparse(frame, output),
+                     getattr(args, "template", None) or args.original)
     if args.candidates:
         print(f"\nCandidates in {args.output}.candidates/ — the output was not changed. Measure them\n"
               "joined and inside the whole text, then adopt one with --take N=FILE.")
@@ -853,7 +970,7 @@ def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
     strong = []
     for n, x in enumerate(output, 1):
         prose = blocks.prose_of(x, fmt)
-        if (only is None or n in only) and prose and not is_title(x):
+        if (only is None or n in only) and prose and not title_block(x, fmt):
             hits = tells.find(prose, lang)
             if tells.flagged(hits):
                 strong.append(f"{n} ({tells.summary(hits)})")
@@ -870,7 +987,7 @@ def one_candidate(p, args, concepts, lang):
     """(text, copied share) of one acceptable version of block p, or None. A list gets
     each item rewritten; a candidate with an item left as the original is not one."""
     fmt = getattr(args, "fmt", "text")
-    if blocks.kind(p, fmt) == "list":
+    if fmt != "marked" and blocks.kind(p, fmt) == "list":
         pairs = []
         for marker, item in blocks.items(p, fmt):
             if not short_item(item):
@@ -881,18 +998,19 @@ def one_candidate(p, args, concepts, lang):
             pairs.append((marker, item))
         r = blocks.rebuild(pairs, fmt)
         return r, copied_share(p, r)
-    limit = getattr(args, "max_words", 0) or (AUTO_PARTS_WORDS if len(p.split()) > AUTO_PARTS else 0)
+    limit = getattr(args, "max_words", 0) or (AUTO_PARTS_WORDS if word_count(p, fmt) > AUTO_PARTS else 0)
     runs = parts(p, fmt, limit)
     if len(runs) > 1:  # a long paragraph: each candidate is built part by part, one paragraph
-        out = []
+        out, unit = [], unit_args(args)
         for j, run in enumerate(runs, 1):
-            text, _, fallback, _ = rewrite_unit(run, args, concepts, lang,
+            text, _, fallback, _ = rewrite_unit(run, unit, concepts, lang,
                                                 args.lead if j == 1 else None)
             if text == run or fallback:
                 return None
             out.append(text)
-        r = ("\n" if fmt == "latex" else " ").join(out)
-        return r, copied_share(p, r)
+        r = join_parts(out, p, fmt)
+        plain = word.text_of if fmt == "docx" else (lambda t: t)
+        return r, copied_share(plain(p), plain(r))
     problem, share, text, _ = one_try(p, args, concepts, lang, args.lead)
     return None if problem else (text, share)
 
@@ -911,10 +1029,14 @@ def write_candidates(args, i, p, concepts, lang="en"):
             continue
         r, share = got
         found += 1
-        ext = ".tex" if getattr(args, "fmt", "text") == "latex" else ".txt"
+        fmt = getattr(args, "fmt", "text")
+        ext = {"latex": ".tex", "docx": ".xml"}.get(fmt, ".txt")
         path = os.path.join(folder, f"p{i:02d}-{found}{ext}")
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(r + "\n")
+        if fmt == "docx":  # the paragraph's XML is for --take; this is for reading and measuring
+            with open(path[:-4] + ".txt", "w", encoding="utf-8") as fh:
+                fh.write(word.text_of(r) + "\n")
         hits = tells.find(blocks.prose_of(r, getattr(args, "fmt", "text")), lang)
         score = sum(w for _, w, _ in hits)
         written.append((score, path))
@@ -936,10 +1058,8 @@ def take(original, output, spec):
         print("ERROR: --take needs N=FILE with an existing FILE", file=sys.stderr)
         return 2
     fmt = blocks.format_of(original)
-    with open(output, encoding="utf-8-sig") as fh:
-        frame, paragraphs = blocks.parse(fh.read(), fmt)
-    with open(original, encoding="utf-8-sig") as fh:
-        count = len(blocks.parse(fh.read(), fmt)[1])
+    frame, paragraphs = blocks.parse(blocks.read(output), fmt)
+    count = len(blocks.parse(blocks.read(original), fmt)[1])
     if count != len(paragraphs):
         print(f"ERROR: {output} has {len(paragraphs)} paragraphs and the original {count}; "
               "--take needs the same count", file=sys.stderr)
@@ -951,12 +1071,11 @@ def take(original, output, spec):
         new = fh.read().strip()
     # a list keeps its lines, and LaTeX its comments' line ends; a paragraph of text is one
     # line, as rewrite.py writes it
-    keep_lines = fmt == "latex" or blocks.kind(new) == "list"
+    keep_lines = fmt in ("latex", "docx") or blocks.kind(new) == "list"
     paragraphs[int(n) - 1] = new if keep_lines else " ".join(new.split())
     # a candidate may have been edited by hand: its figures are checked against the original
-    with open(original, encoding="utf-8-sig") as fh:
-        source = blocks.parse(fh.read(), fmt)[1][int(n) - 1]
-    plain = latex.plain if fmt == "latex" else (lambda t: t)
+    source = blocks.parse(blocks.read(original), fmt)[1][int(n) - 1]
+    plain = latex.plain if fmt == "latex" else word.text_of if fmt == "docx" else (lambda t: t)
     lost = numbers_lost(plain(source), plain(new))
     added = numbers_added(plain(source), plain(new))
     if lost or added:
@@ -964,8 +1083,7 @@ def take(original, output, spec):
             x for x in (lost and "lost the figures " + ", ".join(lost),
                         added and "adds the figures " + ", ".join(added)) if x)
               + " of the original. Put them back, or take another candidate.")
-    with open(output, "w", encoding="utf-8") as fh:
-        fh.write(blocks.unparse(frame, paragraphs))
+    blocks.write(output, blocks.unparse(frame, paragraphs), output)
     # The parts record follows: a part candidate updates its part; a whole one ends it.
     sidecar = output + ".parts.json"
     try:

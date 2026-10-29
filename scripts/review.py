@@ -118,7 +118,7 @@ def readable(block, fmt):
     if fmt == "latex":
         return " ".join(blocks.latex.plain(block).split())
     if fmt == "docx":
-        return " ".join(blocks.prose_of(block, fmt).split())
+        return " ".join(blocks.word.text_of(block).split())
     return " ".join(blocks.prose_of(block, fmt).replace("\n", " ").split())
 
 

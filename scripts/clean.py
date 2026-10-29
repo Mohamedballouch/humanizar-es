@@ -35,6 +35,7 @@ import join  # noqa: E402
 import latex  # noqa: E402
 import rewrite  # noqa: E402
 import tells  # noqa: E402
+import word  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on «» or ñ
     sys.stdout.reconfigure(errors="replace")
@@ -50,7 +51,7 @@ def units(text, fmt):
     out = []
     for i, p in enumerate(paragraphs, 1):
         k = blocks.kind(p, fmt)
-        if k == "prose" and not rewrite.is_title(p):
+        if k == "prose" and not rewrite.title_block(p, fmt):
             out.append((str(i), visible(p, fmt)))
         elif k == "list":
             for j, (_, item) in enumerate(blocks.items(p, fmt), 1):
@@ -59,8 +60,13 @@ def units(text, fmt):
     return frame, paragraphs, out
 
 
+def codec(fmt):
+    """The module that turns a paragraph into prose with placeholders and back, or None."""
+    return latex if fmt == "latex" else word if fmt == "docx" else None
+
+
 def visible(p, fmt):
-    return latex.protect(p)[0] if fmt == "latex" else " ".join(p.split())
+    return codec(fmt).protect(p)[0] if codec(fmt) else " ".join(p.split())
 
 
 def changed_share(before, after):
@@ -84,13 +90,14 @@ def changed_sentences(before, after):
 
 def guard(original, new, fmt, concepts):
     """(problem or None, text for the document, plain before, plain after) for one unit."""
-    if fmt == "latex":
-        vis, pieces = latex.protect(original)
-        bad = latex.problem(vis, new, pieces)
+    if codec(fmt):
+        c = codec(fmt)
+        vis, pieces = c.protect(original)
+        bad = c.problem(vis, new, pieces)
         if bad:
             return bad, original, "", ""
-        before, after = latex.strip_placeholders(vis), latex.strip_placeholders(new)
-        text = latex.restore(new, pieces)
+        before, after = c.strip_placeholders(vis), c.strip_placeholders(new)
+        text = c.restore(new, pieces)
     else:
         before, after, text = " ".join(original.split()), " ".join(new.split()), new
     lost = check.numbers_lost(before, after)
@@ -135,10 +142,12 @@ INSTRUCTIONS = """\
 """
 LATEX_NOTE = ("[1], [2]… stand for math, citations, references and other LaTeX: keep each\n"
               "# one exactly once, where it is; write no backslash and no brace. ")
+WORD_NOTE = ("[1], [2]… stand for words in italics or bold, citations, equations, links and\n"
+             "# footnotes of the Word file: keep each one exactly once, where it is. ")
 
 
 def english_only(text, fmt):
-    lang = join.detect_language(latex.plain(text) if fmt == "latex" else text)
+    lang = join.detect_language(blocks.plain(text, fmt))
     if lang != "en":
         print("ERROR: the cleanup step is for English text; this one reads as Spanish. Skip it "
               "and run rewrite.py on the original.", file=sys.stderr)
@@ -148,14 +157,13 @@ def english_only(text, fmt):
 
 def export(args):
     fmt = blocks.format_of(args.original)
-    with open(args.original, encoding="utf-8-sig") as fh:
-        text = fh.read()
+    text = blocks.read(args.original)
     if not english_only(text, fmt):
         return 2
     _, _, found = units(text, fmt)
     ext = os.path.splitext(args.original)[1] or ".txt"
     head = INSTRUCTIONS.format(source=args.original, ext=ext,
-                               latex=LATEX_NOTE if fmt == "latex" else "")
+                               latex=LATEX_NOTE if fmt == "latex" else WORD_NOTE if fmt == "docx" else "")
     with open(args.output, "w", encoding="utf-8") as fh:
         fh.write(head + "\n" + "\n".join(f"=== {uid} ===\n{v}\n" for uid, v in found))
     flagged = [uid for uid, v in found if tells.find(latex.strip_placeholders(v), "en")]
@@ -166,8 +174,7 @@ def export(args):
 
 def do_import(args):
     fmt = blocks.format_of(args.original)
-    with open(args.original, encoding="utf-8-sig") as fh:
-        text = fh.read()
+    text = blocks.read(args.original)
     frame, paragraphs, found = units(text, fmt)
     work = read_work(args.work)
     unknown = sorted(set(work) - {uid for uid, _ in found})
@@ -176,14 +183,14 @@ def do_import(args):
               "Export again, or fix the «=== n ===» lines.", file=sys.stderr)
         return 2
     concepts = check.load_concepts(args.concepts) if args.concepts else []
-    concepts = check.with_definitions(concepts, latex.plain(text) if fmt == "latex" else text)
+    concepts = check.with_definitions(concepts, blocks.plain(text, fmt))
 
     problems, edited, results = [], [], {}
     words_total = changed_total = 0
     for uid, vis in found:
         original = unit_source(paragraphs, uid, fmt)
         new = work.get(uid, "").strip()
-        plain_vis = latex.strip_placeholders(vis) if fmt == "latex" else vis
+        plain_vis = latex.strip_placeholders(vis) if codec(fmt) else vis
         words = len(re.findall(r"\w+", plain_vis))
         words_total += words
         if not new or new == vis:
@@ -219,8 +226,7 @@ def do_import(args):
         elif blocks.kind(p, fmt) == "list" and any(u.startswith(f"{i}.") for u in ids):
             out[i - 1] = blocks.rebuild([(m, results.get(f"{i}.{j}", t))
                                          for j, (m, t) in enumerate(blocks.items(p, fmt), 1)], fmt)
-    with open(args.output, "w", encoding="utf-8") as fh:
-        fh.write(blocks.unparse(frame, out))
+    blocks.write(args.output, blocks.unparse(frame, out), args.original)
 
     score = lambda ps: sum(tells.score(blocks.prose_of(p, fmt), "en") for p in ps)  # noqa: E731
     before, after = score(paragraphs), score(out)

@@ -44,7 +44,7 @@ import sys
 import unicodedata
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import latex  # noqa: E402
+import blocks  # noqa: E402
 
 if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on «» or ñ
     sys.stdout.reconfigure(errors="replace")
@@ -347,13 +347,45 @@ def definitions(text):
     return found
 
 
+YEAR = r"(?:1[89]\d{2}|20\d{2})[a-z]?"
+UPPER = "A-ZÀ-ÖØ-ÞŁŚŠŹŽŻČĆŘŐŰĞŞ"  # capitals that start a surname: Álvarez, Øster, Šimić
+SURNAME = r"(?:(?:van|von|de|del|der|da|di|du|le|la|dos)\s+)*[" + UPPER + r"][\w'’-]+"
+AUTHORS = (SURNAME + r"(?:\s*,\s*" + SURNAME + r")*(?:\s*,?\s*(?:and|&|y|e)\s+" + SURNAME
+           + r")?(?:\s+et\s+al\.?)?(?:['’]s?)?")
+NARRATIVE = re.compile(r"(" + AUTHORS + r")\s+\(" + YEAR + r"(?:[,;]\s*(?:pp?\.\s*)?\d+(?:[–-]\d+)?)?\)")
+NOT_NAMES = set("""however recently similarly likewise moreover furthermore additionally conversely
+notably specifically thus therefore hence indeed also finally first second third later earlier
+previously subsequently overall together instead meanwhile here there this these those that the
+in on at as by for from of to with following according since after before during while when where
+which our we et al además asimismo también recientemente igualmente posteriormente finalmente
+primero según como desde para por con en el la los las un una""".split())
+
+
+def cited_authors(text):
+    """[(citation, surname)] of every narrative citation («Wang (2021) reports», «Lee and
+    Park (2019)», «Smith et al. (2020, p. 4)»): the model sees them as words, since a lone
+    placeholder in the middle of a sentence came back as «… are noisy [3]», and its year
+    is a figure; a try that drops a surname loses who said it."""
+    found = []
+    for m in NARRATIVE.finditer(text):
+        names = [n for n in re.findall(r"[%s](?:['’][%s])?[\w-]+" % (UPPER, UPPER), m.group(1))
+                 if norm(n) not in NOT_NAMES]  # «O’Brien» is one name
+        cite = m.group(0)[m.group(0).find(names[0]):] if names else ""  # «Recently, » left out
+        for name in names:
+            if (cite, name) not in found:
+                found.append((cite, name))
+    return found
+
+
 def with_definitions(concepts, text):
-    """The concepts plus every long form the text defines. A concept that accepts the
-    acronym instead («large language model | LLM») does not count: a paper still has to
-    spell the long form out where it defines it, and a real run turned «a large language
-    model (LLM, …)» into «an LLM»."""
+    """The concepts plus every long form the text defines, and every author it cites by
+    name. A concept that accepts the acronym instead («large language model | LLM») does
+    not count: a paper still has to spell the long form out where it defines it, and a
+    real run turned «a large language model (LLM, …)» into «an LLM»."""
     exact = {norm(variants[0]) for _, variants in concepts if len(variants) == 1}
     extra = [(f"{lf} ({acr})", [lf]) for lf, acr in definitions(text) if norm(lf) not in exact]
+    names = {norm(v) for _, variants in concepts for v in variants}
+    extra += [(cite, [name]) for cite, name in cited_authors(text) if norm(name) not in names]
     return list(concepts) + extra
 
 
@@ -379,16 +411,14 @@ def main():
     try:
         texts = {}
         for f in [args.original] + args.variants:
-            with open(f, encoding="utf-8-sig") as fh:
-                texts[f] = fh.read()
-            if os.path.splitext(f)[1].lower() in (".tex", ".latex", ".ltx"):
-                texts[f] = latex.plain(texts[f])  # accents as letters, 60\% as 60%
+            # accents as letters and 60\% as 60% in LaTeX; a Word file's text, paragraph by paragraph
+            texts[f] = blocks.plain(blocks.read(f), blocks.format_of(f))
         concepts = (
             load_concepts(args.concepts)
             if args.concepts
             else extract_concepts(texts[args.original])
         )
-    except OSError as e:
+    except (OSError, ValueError, KeyError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
 

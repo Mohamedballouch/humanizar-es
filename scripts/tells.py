@@ -207,7 +207,7 @@ def formatting(block, fmt="text"):
     """Markup that marks AI text as much as its words: a bold label on every item, bold
     sprinkled in prose, emojis in headings and lists, arrows, Title Case Headings. This is
     the one kind of tell to fix by hand: removing markup adds no words."""
-    if fmt == "latex":
+    if fmt in ("latex", "docx"):
         return []
     k = blocks.kind(block)
     hits = []
@@ -277,7 +277,7 @@ def report(paragraphs, lang, fmt="text"):
     out = []
     for i, p in enumerate(paragraphs, 1):
         prose = blocks.prose_of(p, fmt)
-        if not prose or is_title(p):
+        if not prose or is_title(prose if fmt == "docx" else p):
             continue
         hits = find(prose, lang)
         out.append((i, sum(w for _, w, _ in hits), hits))
@@ -294,11 +294,8 @@ def main():
     args = ap.parse_args()
 
     try:
-        texts = []
-        for f in args.files:
-            with open(f, encoding="utf-8-sig") as fh:
-                texts.append(fh.read())
-    except OSError as e:
+        texts = [blocks.read(f) for f in args.files]
+    except (OSError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 2
     fmts = [blocks.format_of(f) for f in args.files]
@@ -326,7 +323,7 @@ def main():
           "two stock words, or 6 points).")
     if to_redo:
         only = ",".join(str(i) for i, _ in to_redo)
-        ext = ".tex" if fmt == "latex" else ".txt"
+        ext = {"latex": ".tex", "docx": ".docx"}.get(fmt, ".txt")
         print("Don't fix them by hand: regenerate them from the original and keep the candidate\n"
               "with the fewest tells that still says everything (the rewrite before join.py):\n"
               f"  python3 scripts/rewrite.py 00-original{ext} -o 01-rewritten{ext} "
