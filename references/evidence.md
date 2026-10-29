@@ -176,6 +176,13 @@ these rows are about what the pipeline keeps and loses.**
 | 2 (5.5.0) | 0 of 6 | 4, all rewritten | 13 min | Every check passed; reading found «teams of three agents» (six), «as measured by throughput» (a mechanism made a measurement), a garbled sentence. Parts 2 and 3 redone with `--part`: 6 tries kept the original, 15 tries passed, one with stray `$` |
 | 3, `--protect-terms` | 0 of 6 | 4, 1 kept as the original | 18 min | Every check passed; the model put a locked term in the wrong place («the optimiser's curse directives») and lost the parentheses of a list |
 | 4, LaTeX (5.7.0) | 0 of 2, then split | 4, 1 kept as the original, 1 copied 59% | 16 min | The abstract with 5 `\cite` and 6 inline formulas: every citation and formula kept in place, the rest of the file identical, the PDF compiled. Reading found «no significant difference in superiority or equivalence» for «neither superiority nor equivalence is established» (the added-negation report named it), «starts» lost, the off-window sentence garbled again, «at» lost |
+| 5 (5.8.0, llama-server) | 0 of 2, then split | 4: part 2 kept as the original, part 3 lost «B = 3»; then candidates for parts 2, 4 and 1 | 8 min + 14 min of candidates | Reading found «the optimistic predictions … were confirmed by the optimiser's curse» (the CLAIM flag named it), «supervised by a simulator» for «through», «maximum estimate» for «point estimate». Candidates: part 2 gave 1 of 18 tries, then 3 of 8 («teams … trained to work on … four test days», «without changing the energy cost»), part 4 one inversion («expected gains … lower than the realised gains») and «validated by the optimiser's curse», part 1 a supervisor that «starts or ends an event». Final: one candidate per part, 9 fixes of 1–3 words (15 words), every check passed, 4 sentences of 51–96 words |
+
+Run 5 also found three faults in the workflow, fixed in 5.8.0: a part candidate is saved as
+the whole paragraph, so adopting part 4's after part 2's put the old part 2 back; a candidates
+run wrote back the parts record it had read at its start; and candidates were ranked by tells
+alone, so the one that wrote «without changing the energy cost» looked as good as the rest.
+Candidates now carry the review sheet's flags and are ranked by them.
 
 What it changed: concepts now match across hyphens, apostrophes and spelling; `\%` and `$…$`
 are repaired; added counts in words («three») are added figures; added negations are
