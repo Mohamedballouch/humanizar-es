@@ -1220,7 +1220,9 @@ def write_candidates(args, i, p, concepts, lang="en"):
 
 
 def take(original, output, spec):
-    """Paragraph N of the output becomes the text of FILE; everything else stays."""
+    """Paragraph N of the output becomes the text of FILE; everything else stays. A part
+    candidate (it has a .part.json beside it) replaces only its part, so candidates of
+    two parts of one paragraph add up instead of the second undoing the first."""
     n, _, path = spec.partition("=")
     if not n.isdigit() or not os.path.isfile(path):
         print("ERROR: --take needs N=FILE with an existing FILE", file=sys.stderr)
@@ -1240,9 +1242,27 @@ def take(original, output, spec):
     # a list keeps its lines, and LaTeX its comments' line ends; a paragraph of text is one
     # line, as rewrite.py writes it
     keep_lines = fmt in ("latex", "docx") or blocks.kind(new) == "list"
-    paragraphs[int(n) - 1] = new if keep_lines else " ".join(new.split())
-    # a candidate may have been edited by hand: its figures are checked against the original
+    new = new if keep_lines else " ".join(new.split())
     source = blocks.parse(blocks.read(original), fmt)[1][int(n) - 1]
+    sidecar = output + ".parts.json"
+    try:
+        with open(sidecar, encoding="utf-8") as fh:
+            saved = json.load(fh)
+    except (OSError, ValueError):
+        saved = None
+    try:
+        with open(path + ".part.json", encoding="utf-8") as fh:
+            part = json.load(fh)
+    except (OSError, ValueError):
+        part = None
+    entry = (saved or {}).get(n)
+    if part and entry and 1 <= part.get("part", 0) <= len(entry["text"]) and (
+            fmt == "docx" or part["text"] in new):  # a candidate edited by hand is taken whole
+        merged = merge_part(paragraphs[int(n) - 1], source, entry, part["part"], part["text"], fmt)
+        if merged is not None:
+            new = merged
+    paragraphs[int(n) - 1] = new
+    # a candidate may have been edited by hand: its figures are checked against the original
     plain = latex.plain if fmt == "latex" else word.text_of if fmt == "docx" else (lambda t: t)
     lost = numbers_lost(plain(source), plain(new))
     added = numbers_added(plain(source), plain(new))
@@ -1253,24 +1273,26 @@ def take(original, output, spec):
               + " of the original. Put them back, or take another candidate.")
     blocks.write(output, blocks.unparse(frame, paragraphs), output)
     # The parts record follows: a part candidate updates its part; a whole one ends it.
-    sidecar = output + ".parts.json"
-    try:
-        with open(sidecar, encoding="utf-8") as fh:
-            saved = json.load(fh)
-    except (OSError, ValueError):
-        saved = None
     if saved is not None and n in saved:
         try:
-            with open(path + ".part.json", encoding="utf-8") as fh:
-                part = json.load(fh)
             saved[n]["text"][part["part"] - 1] = part["text"]
-        except (OSError, ValueError, KeyError, IndexError):
+        except (TypeError, KeyError, IndexError):
             del saved[n]
         with open(sidecar, "w", encoding="utf-8") as fh:
             json.dump(saved, fh, ensure_ascii=False, indent=1)
     print(f"Paragraph {n} of {output} now comes from {path}")
     return 0
 
+
+def merge_part(current, p, entry, k, text, fmt):
+    """`current` with its part k replaced by `text`, when the paragraph still holds that
+    part as its parts record says; None if it does not (then the file is taken whole)."""
+    if fmt == "docx":
+        if word.text_of(join_parts(entry["text"], p, fmt)) != word.text_of(current):
+            return None
+    elif entry["text"][k - 1] not in current:
+        return None
+    return with_part(current, p, entry, k, text, fmt)
 
 if __name__ == "__main__":
     sys.exit(main())

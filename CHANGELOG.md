@@ -46,6 +46,9 @@
   whose only formatting was a language mark, which Word writes all the time, counted as
   formatted and its words were locked; language marks, ligatures and black set by hand are
   plain text now.
+- **Part candidates of two parts add up.** A part candidate is saved as the whole paragraph,
+  so taking part 4's after part 2's put the old part 2 back (found on the journal abstract).
+  `--take` of a part candidate now replaces only its part.
 - **COMPARISON** in `check.py` and `review.py`: an active «outperform» that came back passive
   («… outperformed by …»), or «superior» that became «inferior». A try accepted by the new
   checks read «controllers are out-performed by rule based scheduling» for «controllers

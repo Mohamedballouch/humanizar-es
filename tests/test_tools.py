@@ -1181,6 +1181,33 @@ class Rewrite(unittest.TestCase):
         self.assertIsNone(rewrite.markup_problem("Write to ana@example.com today.",
                                                  "Send it to ana@example.com now."))
 
+    def test_part_candidates_of_two_parts_add_up(self):
+        """Candidates are whole paragraphs: taking part 3's after part 1's put part 1 back."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            with open(src, "w", encoding="utf-8") as fh:
+                fh.write("First part is here. Second part is here. Third part is here.\n")
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write("One is A. Two is B. Three is C.\n")
+            with open(out + ".parts.json", "w", encoding="utf-8") as fh:
+                json.dump({"1": {"source": ["First part is here.", "Second part is here.",
+                                            "Third part is here."],
+                                 "text": ["One is A.", "Two is B.", "Three is C."]}}, fh)
+            for k, whole, text in ((1, "One is new. Two is B. Three is C.", "One is new."),
+                                   (3, "One is A. Two is B. Three is new.", "Three is new.")):
+                cand = os.path.join(tmp, f"p01-part{k}-1.txt")
+                with open(cand, "w", encoding="utf-8") as fh:
+                    fh.write(whole + "\n")
+                with open(cand + ".part.json", "w", encoding="utf-8") as fh:
+                    json.dump({"paragraph": 1, "part": k, "text": text}, fh)
+            for k in (1, 3):
+                r = run(sys.executable, script("rewrite.py"), src, "-o", out,
+                        "--take", "1=" + os.path.join(tmp, f"p01-part{k}-1.txt"))
+                self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(read(out).strip(), "One is new. Two is B. Three is new.")
+            self.assertEqual(json.loads(read(out + ".parts.json"))["1"]["text"],
+                             ["One is new.", "Two is B.", "Three is new."])
+
     def test_take_warns_when_a_candidate_changed_a_figure(self):
         with tempfile.TemporaryDirectory() as tmp:
             src, out, cand = (os.path.join(tmp, n) for n in ("in.txt", "out.txt", "c.txt"))
