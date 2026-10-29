@@ -55,7 +55,10 @@ Mendeley, EndNote), cross-references, links, equations and footnote marks become
 placeholders `[1]`, `[2]`… that the rewrite must keep. Paragraphs with **tracked changes or
 comments are left as they are** (`rewrite.py` says how many): if they should be rewritten,
 have the user accept the changes and resolve the comments first. Footnote text is not
-rewritten.
+rewritten. If `rewrite.py` names paragraphs with a quarter or more of their words in a
+formatting of their own (a size or colour set by hand on pasted text), those words stay as
+they are: ask whether it is deliberate, and if not, the user clears the direct formatting in
+Word (Ctrl+Space) before you run it again.
 
 **A PDF**, only when there is no source (ask for the `.tex` or the Word file first: it is
 always the better input):
@@ -188,7 +191,11 @@ instead of the original, and steps 6 and 8 still compare against `00-original.tx
 
 Tell the user: about 30 seconds per paragraph on an M4 Mac, 1 to 3 minutes on an older PC;
 on the CPU, free. With a GPU, `HUMANIZE_GPU=1` (set before the session starts) runs it
-there, much faster; `install_model.py` says whether llama.cpp sees the GPU. If your
+there, much faster; `install_model.py` says whether llama.cpp sees the GPU. For a thesis or
+any long run, suggest `HUMANIZE_SERVER=1` too: the model is loaded once, in llama.cpp's own
+server on 127.0.0.1, instead of once per try (on 4 CPU cores a try's overhead fell from 6.5 s
+to 0.1–3 s, about a fifth of each try; more with a GPU). Like the GPU, it is the user's
+setting; without `llama-server`, or if it stops, the tries run as before. If your
 environment cuts long commands, run it in the background and read its output: `rewrite.py`
 saves the file after every paragraph and prints its progress. A thesis or a long report
 takes hours on a CPU: if the run stops, `--resume` keeps every paragraph already rewritten

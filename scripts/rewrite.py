@@ -33,7 +33,9 @@ not used, so $\\beta$, \\cite{…} or \\ref{…} cannot change.
 
 Runs on CPU (-ngl 0) at low priority. About 30 s per paragraph on an M4 Mac, 1-3 min on
 an older PC. HUMANIZE_GPU=1 puts the model on the GPU (a llama.cpp built for it, ~5 GB of
-free GPU memory); HUMANIZE_GPU=20 puts only 20 of its 36 layers there.
+free GPU memory); HUMANIZE_GPU=20 puts only 20 of its 36 layers there. HUMANIZE_SERVER=1
+loads the model once for the whole run, in llama.cpp's own server on 127.0.0.1, instead
+of once per try; without llama-server, or if it fails, every try runs llama-completion.
 Install first: python3 scripts/install_model.py  (about 4.6 GB in ~/.cache/humanizar-es/hip)
 
 usage:
@@ -49,10 +51,13 @@ import json
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocks  # noqa: E402
@@ -182,6 +187,11 @@ def context_size(paragraph, generated):
 
 def rewrite_paragraph(paragraph, threads=4, temperature=1.0, lead=None, lang=None):
     prompt, lead = build_prompt(paragraph, lead=lead, lang=lang)
+    if SERVER is not None:
+        generated = int(len(paragraph.split()) * 3) + 100
+        out = SERVER.complete(prompt, generated, temperature, context_size(paragraph, generated))
+        if out is not None:
+            return clean_output(lead, out)
     # The prompt goes in a UTF-8 file and not on the command line: on Windows accents
     # and quotes get mangled when passed as an argument.
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".txt", delete=False) as fh:
@@ -190,6 +200,134 @@ def rewrite_paragraph(paragraph, threads=4, temperature=1.0, lead=None, lang=Non
         return clean_output(lead, _run_llama(fh.name, paragraph, threads, temperature))
     finally:
         os.remove(fh.name)
+
+
+SERVER = None  # the llama-server of this run, with the model loaded (HUMANIZE_SERVER=1)
+
+
+def server_binary():
+    """llama-server next to llama-completion, or on the PATH; HUMANIZE_LLAMA_SERVER holds
+    another path."""
+    custom = os.environ.get("HUMANIZE_LLAMA_SERVER")
+    if custom:
+        return custom if os.path.isfile(custom) else None
+    cli = llama_binary()
+    if cli:
+        for name in ("llama-server", "llama-server.exe"):
+            path = os.path.join(os.path.dirname(cli), name)
+            if os.path.isfile(path):
+                return path
+    return shutil.which("llama-server")
+
+
+class Server:
+    """llama.cpp's server with the model and the adapter loaded once: each try is then a
+    request on 127.0.0.1, not a new process that reads 4.6 GB (and, on a GPU, copies them
+    to it) before writing a word. Same sampling as llama-completion; a failure of any kind
+    makes complete() return None, and the try runs llama-completion instead."""
+
+    def __init__(self, binary, threads, context):
+        with socket.socket() as probe:  # a free port
+            probe.bind(("127.0.0.1", 0))
+            self.port = probe.getsockname()[1]
+        self.context = context
+        cmd = [binary, "-m", base_model_path(), "--lora", adapter_path(), *device_args(),
+               "-t", str(threads), "-c", str(context), "-np", "1",
+               "--host", "127.0.0.1", "--port", str(self.port)]
+        if binary.endswith(".py"):  # a fake server, for the tests
+            cmd = [sys.executable] + cmd
+        extra = {}
+        if os.name == "nt":
+            extra["creationflags"] = subprocess.BELOW_NORMAL_PRIORITY_CLASS
+        elif shutil.which("nice"):
+            cmd = ["nice", "-n", "15"] + cmd
+        self.log = tempfile.TemporaryFile()
+        self.proc = subprocess.Popen(cmd, stdout=self.log, stderr=subprocess.STDOUT,
+                                     stdin=subprocess.DEVNULL, **extra)
+        # no proxy for 127.0.0.1, whatever HTTP_PROXY says
+        self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def url(self, path):
+        return f"http://127.0.0.1:{self.port}{path}"
+
+    def ready(self, timeout=600):
+        """True once the model is loaded; False if the server exits or never gets there."""
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if self.proc.poll() is not None:
+                return False
+            try:
+                with self.opener.open(self.url("/health"), timeout=5) as r:
+                    if r.status == 200:
+                        return True
+            except (urllib.error.URLError, OSError, ValueError):
+                pass
+            time.sleep(0.5)
+        return False
+
+    def complete(self, prompt, n_predict, temperature, needed):
+        """The text after the prompt, or None (the server is gone, or the paragraph needs
+        more context than it has)."""
+        if needed > self.context or self.gone():
+            return None
+        body = json.dumps({"prompt": prompt, "n_predict": n_predict, "temperature": temperature,
+                           "top_p": 0.95, "stop": ["</target_text>"]}).encode("utf-8")
+        request = urllib.request.Request(self.url("/completion"), data=body,
+                                         headers={"Content-Type": "application/json"})
+        try:
+            with self.opener.open(request, timeout=3600) as r:
+                return json.loads(r.read().decode("utf-8"))["content"]
+        except (urllib.error.URLError, OSError, ValueError, KeyError):
+            self.gone()
+            return None
+
+    def gone(self):
+        """True once the server has exited; says so the first time."""
+        if self.proc.poll() is None:
+            return False
+        if not getattr(self, "said", False):
+            self.said = True
+            print("WARNING: llama-server stopped; the rest of the tries run llama-completion.\n"
+                  + self.tail(), flush=True)
+        return True
+
+    def tail(self, lines=6):
+        self.log.seek(0)
+        return "\n".join(self.log.read().decode("utf-8", "replace").strip().splitlines()[-lines:])
+
+    def stop(self):
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(15)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.log.close()
+
+
+def start_server(threads, paragraphs, fmt):
+    """The run's Server when HUMANIZE_SERVER=1 and llama-server starts, else None. Its
+    context fits the longest paragraph of the document."""
+    if os.environ.get("HUMANIZE_SERVER", "").strip().lower() not in ("1", "yes", "on", "true"):
+        return None
+    binary = server_binary()
+    if not binary:
+        print("HUMANIZE_SERVER: llama-server is not next to llama-completion nor on the PATH; "
+              "every try runs llama-completion.", flush=True)
+        return None
+    longest = max((word_count(p, fmt) for p in paragraphs), default=0)
+    generated = longest * 3 + 100
+    context = context_size(" ".join(["w"] * longest), generated)
+    t0 = time.time()
+    server = Server(binary, threads, context)
+    if not server.ready():
+        print("HUMANIZE_SERVER: llama-server did not start; every try runs llama-completion.\n"
+              + server.tail(), flush=True)
+        server.stop()
+        return None
+    print(f"Model loaded once in llama-server ({time.time() - t0:.0f} s, context {context}).",
+          flush=True)
+    return server
 
 
 def _run_llama(prompt_file, paragraph, threads, temperature):
@@ -460,6 +598,14 @@ def main():
                 f"{n} paragraphs with {why}" for why, n in kept_word.items())
                 + ". Accept the tracked changes and resolve the comments first to have them rewritten.")
     frame, paragraphs = blocks.parse(text, args.fmt)
+    if args.fmt == "docx":
+        heavy = [(i, n / w) for i, (n, w) in enumerate(map(word.locked_share, paragraphs), 1)
+                 if n >= 8 and n >= 0.25 * w]
+        if heavy:
+            print("In the Word file, these paragraphs have a quarter or more of their words in "
+                  "a formatting of their own (bold, italics, a size or colour set by hand), "
+                  "which stay as they are: " + ", ".join(f"{i} ({share:.0%})" for i, share in heavy)
+                  + ". If it is not meant, clear the direct formatting in Word (Ctrl+Space) first.")
     lang = join.detect_language(" ".join(blocks.prose_of(b, args.fmt) for b in paragraphs))
     kept, kept_frame, only = None, None, None
     if args.resume and os.path.isfile(args.output) and not args.only:
@@ -489,12 +635,18 @@ def main():
             print(f"ERROR: {args.output} has {len(kept)} paragraphs and the original "
                   f"{len(paragraphs)}; --only needs the same count", file=sys.stderr)
             return 2
+    global SERVER
+    SERVER = start_server(args.threads, paragraphs, args.fmt)
     try:
         return run_paragraphs(args, kept_frame or frame, paragraphs, kept, only, concepts, lang)
     except LlamaError as e:
         print(f"ERROR: {e}\nThe paragraphs finished before it are saved in {args.output}. "
               "Check that llama.cpp runs: " + HOW_TO_INSTALL_LLAMA, file=sys.stderr)
         return 2
+    finally:
+        if SERVER is not None:
+            SERVER.stop()
+            SERVER = None
 
 
 def parse_only(spec, count):

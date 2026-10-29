@@ -322,6 +322,14 @@ def main():
               "NVIDIA included) or -DGGML_CUDA=ON (NVIDIA; an RTX 50 needs CUDA 12.8+).")
     else:
         print("  runs on: the GPU" + (f" ({'; '.join(found)})" if found else ""))
+    server = rewrite.server_binary()
+    if server:
+        on = os.environ.get("HUMANIZE_SERVER", "").strip().lower() in ("1", "yes", "on", "true")
+        print(f"  llama-server: {server}"
+              + ("" if on else " (HUMANIZE_SERVER=1 loads the model once per run, not per try)"))
+    elif os.environ.get("HUMANIZE_SERVER"):
+        print("WARNING: HUMANIZE_SERVER is set, but there is no llama-server next to "
+              "llama-completion or on the PATH: every try runs llama-completion.")
     return 0 if args.no_test else smoke_test()
 
 

@@ -261,6 +261,14 @@ while the model ran. If the laptop lists its integrated graphics too, `export
 HUMANIZE_GPU_DEVICE=Vulkan1` (a name from `llama-completion --list-devices`) pins the run to
 the discrete one. It is the same model either way; the measurements were made on CPU.
 
+**Load the model once.** `export HUMANIZE_SERVER=1` starts llama.cpp's own server
+(`llama-server`, which comes with llama-completion in brew, winget and a cmake build) once per
+run, listening on 127.0.0.1 only, and every try becomes a request to it instead of a new
+process that loads the model again. On 4 CPU cores a try's overhead fell from 6.5 s to
+0.1–3 s (the model loads once, in 4 s), about a fifth of each try; with a GPU, where writing
+a paragraph is fast, the share should be larger (not measured). If `llama-server` is missing
+or stops, the tries run llama-completion as before.
+
 ---
 
 ## Use it by hand
@@ -287,9 +295,15 @@ paragraph:
 
 ```bash
 python3 scripts/check.py my-text.txt rewritten.txt --concepts concepts.txt
+python3 scripts/review.py my-text.txt rewritten.txt --concepts concepts.txt -o review.md
 python3 scripts/tells.py my-text.txt rewritten.txt       # stock AI phrases left, per paragraph
+python3 scripts/fix.py rewritten.txt 4 "the majority" "many"     # refuses more than 3 words
 python3 scripts/rewrite.py my-text.txt -o rewritten.txt --concepts concepts.txt --only 6,11
 ```
+
+`review.py` puts each sentence of the original beside the rewrite's and flags where meaning
+most often changes: a figure, a negation, a claim made firmer, a comparison that may have
+flipped («outperform» -> «outperformed by»), a dropped or added sentence. Read every pair.
 
 A long paragraph that keeps losing terms (an abstract of 150+ words): add `--max-words 100`.
 It is rewritten in runs of whole sentences and stays **one** paragraph; never split it into
@@ -345,7 +359,7 @@ it dropped an idea.
 
 Worked examples, with every hand fix listed, are in [`examples/`](examples/).
 
-### Papers: LaTeX in, LaTeX out; PDF in, PDF out
+### Papers and theses: LaTeX, Word and PDF
 
 Give the scripts a `.tex` and they work on the prose only. The preamble, sections,
 equations, figures, tables, algorithms, theorems, captions, comments and bibliography stay
@@ -360,6 +374,28 @@ python3 scripts/join.py 01-rewritten.tex -o 02-final.tex --pauses 2
 python3 scripts/check.py paper.tex 02-final.tex --concepts concepts.txt
 python3 scripts/convert.py 02-final.tex -o 02-final.pdf      # compiles it, BibTeX included
 ```
+
+**A thesis or report in Word** works the same way, `.docx` in and `.docx` out, with nothing
+to install. Only the prose of the body is rewritten: headings, captions, the table of
+contents, the bibliography (after a «References» heading or bold line, or a Zotero, Mendeley
+or EndNote field), quotations and code, equations, tables, footnotes and styles stay byte
+for byte, and inside a paragraph italics, bold, citation fields, cross-references, links and
+footnote marks are placeholders. Paragraphs with tracked changes or comments are left as
+they are: accept and resolve them first if they should be rewritten. Fixes go through
+`fix.py`, which also keeps a long paragraph's parts record right.
+
+```bash
+python3 scripts/rewrite.py thesis.docx -o 01-rewritten.docx --concepts concepts.txt
+python3 scripts/fix.py 01-rewritten.docx 12 --show                 # the paragraph, [n] explained
+python3 scripts/join.py 01-rewritten.docx -o 02-final.docx --pauses 2
+python3 scripts/check.py thesis.docx 02-final.docx --concepts concepts.txt
+python3 scripts/convert.py 02-final.docx -o 02-final.pdf          # with LibreOffice
+```
+
+**Citations hold in every format.** In LaTeX `\cite` is a placeholder; in Word, a citation
+manager's field; in text and Markdown, «(Smith et al., 2020; Lee, 2019)», «[12], [14]–[16]»,
+footnote marks and inline math `$…$`. A narrative citation («Wang (2021) reports») stays part
+of the sentence, and a try that drops its author or its year is not used.
 
 With only a PDF, `convert.py` turns it into text first (it joins lines, undoes hyphenation,
 drops page numbers and running headers, and fences equations, table cells and references
@@ -423,7 +459,7 @@ No. It changes who wrote the sentences and their rhythm, not the spelling.
 Three of four essays reached 0% in Grammarly, and the latest one passes Grammarly, GPTZero
 and ZeroGPT at once. The pieces that can be deterministic are (the joining is seeded;
 ZeroGPT gives the same score for the same text), output that copies the original is
-refused, and 151 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
+refused, and 175 tests run on every change on Ubuntu, macOS and Windows. Detectors drift
 over time, which is why every session carries controls.
 
 **Does the selection step send my text anywhere?**
@@ -468,15 +504,18 @@ humanizar-es/
 │   ├── install_model.py     downloads the model (once)
 │   ├── rewrite.py           stages 1, 2 and 4: rewrite, guard fidelity, candidates
 │   ├── check.py             stage 2: concepts and negations, original vs rewrite
+│   ├── review.py            stage 2: each sentence beside the rewrite's, flagged
+│   ├── fix.py               stage 2: a fix of one to three words, in any format
 │   ├── clean.py             optional step 4a: the slop edited out first, through a gate
 │   ├── tells.py             stages 2 and 4: stock AI phrases per paragraph, what to regenerate
 │   ├── blocks.py            paragraphs and Markdown blocks (code, tables, lists), shared
 │   ├── latex.py             LaTeX papers: the prose, and placeholders for math and commands
-│   ├── convert.py           PDF to text, text to PDF, LaTeX to PDF
+│   ├── word.py              Word files: the prose, and placeholders for formatting and fields
+│   ├── convert.py           PDF to text, text to PDF, LaTeX and Word to PDF
 │   └── join.py              stage 3: rebuild the rhythm of each paragraph
 ├── examples/                worked examples in Spanish and English
 ├── references/              every measurement, and how to measure
-└── tests/                   151 tests on Ubuntu, macOS and Windows (no network, no model)
+└── tests/                   175 tests on Ubuntu, macOS and Windows (no network, no model)
 ```
 
 The old script names (`hip.py`, `unir.py`, `verificar_fidelidad.py`, `instalar_hip.py`)

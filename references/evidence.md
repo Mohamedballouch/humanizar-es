@@ -186,6 +186,44 @@ candidates one by one; `--words-per-period` keeps a long paragraph's sentences r
 terms inside a noun phrase did not. Reading every paragraph
 against the original (step 6) caught what no check did, in all three runs.
 
+## 2f. Citations in a manuscript paragraph, and a Word file, with the real model (October 29)
+
+Same model and machine as 2e. **No detector was run.** A 74-word Markdown paragraph with every
+kind of citation a manuscript carries: «(Smith et al., 2020; Lee & Park, 2019)», «[12],
+[14]–[16]», «Wang (2021) reports», «Kim (2020, p. 4)», and two inline formulas.
+
+| Code | Usable tries | What the usable ones did |
+|---|---|---|
+| 5.7.0, citations as plain words | 1 of 24 | «[12], [14]–[16]» became «(12), (14) - (16)», and every check passed |
+| first placeholders: the year of a narrative citation locked | 2 of 24 | one dropped the authors («… are noisy (2021)», «the formulation of (2020, p. 4)»), one wrote «[14]--[16]» |
+| narrative citations as words, a numbered cluster as one piece (12 tries, logged) | 2 of 12 | faithful |
+| the same 12 outputs through 5.8.0's checks (replayed) | 6 of 12 | one inverted the finding («controllers are out-performed by rule based scheduling»: the new COMPARISON flag names it), one overstated it («gains shrink» -> «advantages disappear»), two faithful |
+
+Why the 12 logged tries were refused: a concept 5 times (three times «on-site microgrid»:
+twice «microgrids on-site», once «on-site» really dropped; «the cost of outages»; «price
+predictions»), a placeholder 4 times (repeated at a sentence end twice, all four written as
+«(1)»… «(4)» once, renumbered once), copied once. Two tries wrote «Wang [2021]» and «Kim
+[2020, p.4]», which would have passed every check. 5.8.0 repairs both bracket habits and
+matches a two-word term in the orders English moves it into; a dropped «on-site» and «price
+predictions» are still refused.
+
+A thesis-like Word file (four prose paragraphs; a Zotero citation field, a superscript
+citation, a hyperlink, an italic species name, a tracked change and a citation manager's
+bibliography field): three paragraphs rewritten in 47 seconds, the fourth kept as a title,
+the tracked-change paragraph and the bibliography untouched. Every piece came back in place,
+all 22 figures and 5 concepts held, and the review sheet flagged nothing. Reading found
+«minimize» for «reduce» and «as shown in public dataset» (its article lost): two one-word
+fixes, now made with `fix.py`. It also found «simulation ¹», a space before the superscript
+citation; a piece written against the word before it now stays against it.
+
+## 2g. Loading the model once (October 29)
+
+The cost of a try that writes one token, on 4 CPU cores, the same 74-word paragraph:
+`llama-completion` 12.9 s cold, then 6.3 and 6.8 s (a new process loads the model every time);
+llama-server 4.1 s to load once, then 3.3 s for a new prompt and 0.1 s for the same prompt
+again. Six whole tries took 28.2 s each with `llama-completion` and 25.4 s through the server
+(22.0 s without one try slowed by other work on the machine). Not measured on a GPU.
+
 ## 3. Why a base model
 
 Xu et al. (2026), *Base Models Look Human To AI Detectors*

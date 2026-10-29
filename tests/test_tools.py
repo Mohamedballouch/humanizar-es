@@ -2103,6 +2103,24 @@ class Word(unittest.TestCase):
         self.assertEqual(word.text_of(xml), "In simulation1 controllers win, and costs fall.")
         self.assertIn('fall.</w:t></w:r>' + W_NOTE.replace('<w:r><w:rPr>', '<w:r><w:rPr>'), xml)
 
+    def test_invisible_formatting_is_text_and_words_kept_out_are_reported(self):
+        """Language, ligatures and black set by hand do not show; a size set by hand on half
+        a pasted paragraph does, and keeps those words out of the rewrite: rewrite.py says so."""
+        p = ('<w:p><w:r><w:rPr><w:lang w:val="en-GB"/></w:rPr><w:t xml:space="preserve">Most of this '
+             'text is normal and the model rewrites it </w:t></w:r><w:r><w:rPr><w:sz w:val="20"/></w:rPr>'
+             '<w:t>but a pasted part in another size stays exactly as it was written here</w:t></w:r>'
+             '<w:r><w:rPr><w:color w:val="000000"/><w14:ligatures w14:val="standardContextual"/></w:rPr>'
+             '<w:t xml:space="preserve"> and black set by hand is plain text.</w:t></w:r></w:p>')
+        self.assertEqual(word.protect(p)[0], "Most of this text is normal and the model rewrites it [1] "
+                                             "and black set by hand is plain text.")
+        self.assertEqual(word.locked_share(p), (14, 33))
+        tmp, src, env = self._docx(w_para("Results", "Heading1") + p)
+        r = run(sys.executable, script("rewrite.py"), src, "-o", os.path.join(tmp, "out.docx"),
+                "--tries", "1", "--max-copied", "1", "--threads", "1", env=env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("in a formatting of their own", r.stdout)
+        self.assertIn(": 1 (42%)", r.stdout)
+
     def test_writing_keeps_every_other_part_byte_for_byte(self):
         tmp, src, _ = self._docx()
         out = os.path.join(tmp, "copy.docx")
@@ -2190,6 +2208,77 @@ class Word(unittest.TestCase):
         r = run(sys.executable, script("convert.py"), src, "-o", pdf)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("12%", "".join(convert.pdf_pages(pdf)))
+
+
+class Server(unittest.TestCase):
+    """HUMANIZE_SERVER=1: the model is loaded once in llama-server, every try is a request."""
+
+    TEXT = ("The supervisor cuts costs on every line of the plant, day after day, as planned.\n\n"
+            "A second paragraph also cuts its words here and there, in the same old way.\n")
+
+    def _setup(self, server_code):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+        for f in (rewrite.BASE, rewrite.ADAPTER):
+            open(os.path.join(tmp, f), "w").close()
+        log = os.path.join(tmp, "log")
+        cli, server = os.path.join(tmp, "fake_cli.py"), os.path.join(tmp, "fake_server.py")
+        with open(cli, "w", encoding="utf-8") as fh:
+            fh.write("import sys\n"
+                     f"open({log!r}, 'a').write('cli\\n')\n"
+                     "args = sys.argv[1:]\n"
+                     "prompt = open(args[args.index('-f') + 1], encoding='utf-8').read()\n"
+                     "src = prompt.split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+                     "lead = prompt.split('<target_text>\\n')[1]\n"
+                     "out = ' ' + ' '.join(src.replace('cuts', 'trims').split()[len(lead.split()):])\n"
+                     "sys.stdout.write(out + '\\n</target_text>')\n")
+        with open(server, "w", encoding="utf-8") as fh:
+            fh.write(server_code.replace("LOG", repr(log)))
+        src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+        with open(src, "w", encoding="utf-8") as fh:
+            fh.write(self.TEXT)
+        env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=cli, HUMANIZE_SERVER="1",
+                   HUMANIZE_LLAMA_SERVER=server)
+        r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--tries", "1",
+                "--max-copied", "1", "--threads", "1", env=env)
+        return r, read(out), read(log).split()
+
+    def test_the_model_is_loaded_once_and_every_try_is_a_request(self):
+        fake = (
+            "import http.server, json, sys\n"
+            "args = sys.argv[1:]\n"
+            "open(LOG, 'a').write('start\\n')\n"
+            "class Handler(http.server.BaseHTTPRequestHandler):\n"
+            "    def log_message(self, *a):\n"
+            "        pass\n"
+            "    def answer(self, code, data):\n"
+            "        self.send_response(code)\n"
+            "        self.send_header('Content-Type', 'application/json')\n"
+            "        self.end_headers()\n"
+            "        self.wfile.write(json.dumps(data).encode('utf-8'))\n"
+            "    def do_GET(self):\n"
+            "        self.answer(200 if self.path == '/health' else 404, {'status': 'ok'})\n"
+            "    def do_POST(self):\n"
+            "        body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))\n"
+            "        src = body['prompt'].split('<source_text>\\n')[1].split('\\n</source_text>')[0]\n"
+            "        lead = body['prompt'].split('<target_text>\\n')[1]\n"
+            "        open(LOG, 'a').write('request\\n')\n"
+            "        words = src.replace('cuts', 'reduces').split()[len(lead.split()):]\n"
+            "        self.answer(200, {'content': ' ' + ' '.join(words)})\n"
+            "port = int(args[args.index('--port') + 1])\n"
+            "http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()\n")
+        r, out, log = self._setup(fake)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("Model loaded once in llama-server", r.stdout)
+        self.assertEqual(log, ["start", "request", "request"])  # never the CLI
+        self.assertEqual(out.count("reduces"), 2)
+
+    def test_a_server_that_does_not_start_leaves_every_try_to_llama_completion(self):
+        r, out, log = self._setup("import sys\nopen(LOG, 'a').write('start\\n')\nsys.exit(1)\n")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("did not start; every try runs llama-completion", r.stdout)
+        self.assertEqual(log, ["start", "cli", "cli"])
+        self.assertEqual(out.count("trims"), 2)
 
 
 class Fix(unittest.TestCase):

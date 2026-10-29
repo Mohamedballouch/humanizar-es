@@ -294,13 +294,17 @@ class Pieces(dict):
     meta = None
 
 
-SIGNIFICANT_DROP = re.compile(r"<[\w.-]*:?(?:lang|noProof|rFonts|kern|szCs|bCs|iCs)\b[^>]*/>")
+SIGNIFICANT_DROP = re.compile(
+    r"<[\w.-]*:?(?:lang|noProof|rFonts|kern|szCs|bCs|iCs|ligatures|numForm|numSpacing|cntxtAlts)\b[^>]*/>"
+    r'|<[\w.-]*:?color\s+[\w.-]*:?val="(?:000000|auto)"\s*/>')
 
 
 def signature(rpr):
     """A run's formatting, without what does not show (language, proofing marks, fonts of
-    other scripts): two runs that differ only there are the same text to a reader."""
-    return SIGNIFICANT_DROP.sub("", re.sub(r"\s+", " ", rpr)).replace(" ", "")
+    other scripts, ligatures, black set by hand): two runs that differ only there are the
+    same text to a reader."""
+    sig = SIGNIFICANT_DROP.sub("", re.sub(r"\s+", " ", rpr)).replace(" ", "")
+    return re.sub(r"^<[\w.-]*:?rPr/?>|</[\w.-]*:?rPr>$", "", sig)  # nothing left: no formatting
 
 
 def protect(p):
@@ -395,9 +399,20 @@ def protect(p):
     # a piece written against the word before it (a superscript citation, a footnote mark
     # after the period) stays against it: the model wrote «simulation [1]» for «simulation¹»
     glued = [k for k in pieces if re.search(r"\S\[%d\]" % k, visible)]
+    # words the model will not see because their run has a formatting of its own
+    locked = sum(len(seg[1].split()) for seg in segments if seg[0] == "text" and signature(seg[2]) != base)
     pieces.meta = {"open": open_tag, "ppr": ppr, "rpr": base_rpr, "w": w, "glued": glued,
-                   "start": "".join(zero_start), "end": "".join(zero_end)}
+                   "start": "".join(zero_start), "end": "".join(zero_end), "locked": locked}
     return visible, pieces
+
+
+def locked_share(p):
+    """(words in a formatting of their own, all words) of paragraph p: italics and bold,
+    but also a size or a colour set by hand on part of a pasted paragraph, which keeps those
+    words out of the rewrite."""
+    visible, pieces = protect(p)
+    words = len(strip_placeholders(visible).split()) + pieces.meta["locked"]
+    return pieces.meta["locked"], words
 
 
 def problem(visible, rewritten, pieces):

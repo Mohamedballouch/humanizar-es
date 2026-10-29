@@ -1,5 +1,59 @@
 # Changelog
 
+## 5.8.0 — October 29, 2026
+
+**Theses and reports in Word, and what 12 logged real-model tries showed.**
+
+- **Word files (`.docx`) in every script**, with the standard library: only
+  `word/document.xml` changes; styles, images, footnotes, comments, headers and a citation
+  manager's data are copied byte for byte. Only the prose of the body is rewritten.
+  Headings (by style or outline level, a thesis template's own style based on Heading 1
+  included), captions, contents, the bibliography (by style, after a «References» heading or
+  bold line, or a citation manager's field), quotations and code (by style), equations,
+  tables, text boxes and Word's own document parts stay; paragraphs with tracked changes or
+  comments are left as they are and counted. The paragraphs of other content controls,
+  where templates keep an abstract, are prose. Inside a paragraph, italics, bold,
+  superscript, citation fields (Zotero, Mendeley, EndNote), cross-references, links,
+  equations and footnote marks reach the model as placeholders; a piece written against
+  the word before it stays against it (a real run wrote «simulation ¹»). Long paragraphs are
+  rewritten in parts, `--part` included. Tested on files from pandoc and LibreOffice and a
+  thesis with a Zotero field, a tracked change and a bibliography field: the result opens in
+  python-docx and LibreOffice, and the real model kept every piece in place.
+- **`fix.py`**: step 6's fixes, one to three words of one paragraph, in any format; more is
+  refused («regenerate it»). In Word it keeps every placeholder exactly once and the parts
+  record, so `--part` still works after a fix. `--show` prints what each `[n]` stands for.
+- **`convert.py 02-final.docx -o 02-final.pdf`**, with LibreOffice; it reads the PDF back for
+  the figures.
+- **Citations in text, Markdown and Word are placeholders**: «(Smith et al., 2020; Lee,
+  2019)», a numbered cluster «[12], [14]–[16]» as one piece (alone, its dash came back as
+  «--»), footnote marks and inline math. A narrative citation («Wang (2021) reports») stays
+  words: locked as a piece it came back as «… are noisy [3]», and with only «(2021)» locked
+  the model dropped «Wang». Its authors are concepts now, and its year a figure. Placeholders
+  are put back in one pass: «[2] … [1]» could come back swapped.
+- **Two bracket habits of the model are repaired before any check**: «(1)»… «(4)» written for
+  the placeholders, and «Wang [2021]» for «Wang (2021)» (that try passed every check).
+- **A concept of two plain words matches the orders English moves it into**: «outage cost*»
+  finds «the cost of outages», «on-site microgrid» finds «microgrids on-site».
+- **`HUMANIZE_SERVER=1`** loads the model once per run in llama.cpp's own server (on
+  127.0.0.1 only) instead of once per try; with no `llama-server`, or if it stops, the tries
+  run `llama-completion` as before. On 4 CPU cores a try's overhead fell from 6.5 s to 0.1–3 s
+  (a retry of the same paragraph reuses its prompt), about a fifth of each try; more is
+  expected with a GPU, where writing is fast (not measured). `install_model.py` says whether
+  `llama-server` is there.
+- **Words the model will not see are reported in Word**: a size or colour set by hand on
+  part of a pasted paragraph keeps those words out of the rewrite, and `rewrite.py` names
+  the paragraphs where that is a quarter or more of the words. Fixed on the way: a run
+  whose only formatting was a language mark, which Word writes all the time, counted as
+  formatted and its words were locked; language marks, ligatures and black set by hand are
+  plain text now.
+- **COMPARISON** in `check.py` and `review.py`: an active «outperform» that came back passive
+  («… outperformed by …»), or «superior» that became «inferior». A try accepted by the new
+  checks read «controllers are out-performed by rule based scheduling» for «controllers
+  outperform rule-based schedules»; the flag points straight at it.
+
+Replayed through the new checks, the 12 logged tries of a paragraph with five citations and
+two formulas went from 2 usable to 6 (references/evidence.md §2f).
+
 ## 5.7.0 — October 26, 2026
 
 **For journal articles, theses and reports.**
