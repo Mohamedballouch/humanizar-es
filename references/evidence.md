@@ -224,6 +224,16 @@ llama-server 4.1 s to load once, then 3.3 s for a new prompt and 0.1 s for the s
 again. Six whole tries took 28.2 s each with `llama-completion` and 25.4 s through the server
 (22.0 s without one try slowed by other work on the machine). Not measured on a GPU.
 
+The Word file of 2f through the whole pipeline in this mode: the model loaded once (12 s), the
+three paragraphs were rewritten in 35 s in all, and the server was gone at the end; join,
+check (22 of 22 figures) and the PDF followed. The review sheet flagged one pair, a negation
+added: «noisy price forecasts shrink their gains» had become «they perform no better than the
+rule-based controller when price forecasts are noisy», a claim the paper never made, so that
+paragraph is one to regenerate. Reading found two more: «in manufacturing other lines»
+(the bold «manufacturing» is a placeholder; `fix.py … "in [2] other lines" "in other [2]
+lines"` put it back, its bold kept) and «as the reward» dropped after the formula, which no
+check sees.
+
 ## 3. Why a base model
 
 Xu et al. (2026), *Base Models Look Human To AI Detectors*
