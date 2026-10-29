@@ -386,7 +386,9 @@ stock connector). A paragraph over 150 words (or `--max-words`) gets each
 candidate built part by part, still one paragraph. Candidates land in
 `01-rewritten.txt.candidates/`; tries that lose a
 concept, change a quote, invent a reference or copy the original are already discarded.
-Each candidate is printed with its tells score, and the list ends fewest tells first.
+Each candidate is printed with its tells score and the review sheet's flags (a negation
+added or lost, a claim made firmer, a comparison flipped), and the list ends fewest flags,
+then fewest tells, first: read the flagged ones with most care.
 `--max-tells 2` also discards tries above that score (it costs more tries).
 
 1. **Read each candidate against the original** and drop any that loses an idea, even if

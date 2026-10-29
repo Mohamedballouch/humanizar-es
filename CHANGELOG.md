@@ -46,6 +46,12 @@
   whose only formatting was a language mark, which Word writes all the time, counted as
   formatted and its words were locked; language marks, ligatures and black set by hand are
   plain text now.
+- **Every candidate is printed with the review sheet's flags** (a negation added or lost, a
+  claim made firmer, a comparison flipped) and ranked by them, then by tells. A real part
+  candidate wrote «without changing the energy cost» for «rather than lower energy cost»:
+  its added «without» now heads the line.
+- **A candidates run leaves the parts record alone**; it wrote back the copy it read at
+  its start, undoing a `--take` or a `fix.py` made while it ran.
 - **Part candidates of two parts add up.** A part candidate is saved as the whole paragraph,
   so taking part 4's after part 2's put the old part 2 back (found on the journal abstract).
   `--take` of a part candidate now replaces only its part.

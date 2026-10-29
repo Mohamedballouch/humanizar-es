@@ -1038,10 +1038,13 @@ def write_part_candidates(i, p, current, entry, args, concepts, lang):
         with open(path + ".part.json", "w", encoding="utf-8") as fh:
             json.dump({"paragraph": i, "part": k, "text": text}, fh, ensure_ascii=False)
         hits = tells.find(word.strip_placeholders(text) if fmt == "docx" else text, lang)
-        written.append((sum(w for _, w, _ in hits), path))
-        print(f"Paragraph {i}, part {k}: {path} (tells {written[-1][0]}): {text}", flush=True)
+        flags = meaning_flags(run, text, getattr(unit, "fmt", "text"))
+        written.append((len(flags), sum(w for _, w, _ in hits), path))
+        print(f"Paragraph {i}, part {k}: {path} (tells {written[-1][1]}"
+              + (f"; flags: {'; '.join(flags)}" if flags else "") + f"): {text}", flush=True)
     if found < args.candidates:
         print(f"Paragraph {i}, part {k}: only {found} acceptable of {tries} tries", flush=True)
+    ranking(i, written, f", part {k}")
     return True
 
 
@@ -1107,7 +1110,7 @@ def run_paragraphs(args, frame, paragraphs, kept, only, concepts, lang):
 
     if report.get("parts"):
         saved.update(report["parts"])
-    if saved:
+    if saved and not args.candidates:  # candidates change nothing, a --take made meanwhile included
         with open(sidecar, "w", encoding="utf-8") as fh:
             json.dump(saved, fh, ensure_ascii=False, indent=1)
     if getattr(args, "part", None) is not None and not args.candidates:
@@ -1183,6 +1186,36 @@ def one_candidate(p, args, concepts, lang):
     return None if problem else (text, share)
 
 
+def meaning_flags(source, text, fmt="text"):
+    """What review.py flags first, for one candidate against what it rewrites: a negation
+    added or lost, a claim made firmer, a comparison that may have flipped. A real part
+    candidate came back with «without changing the energy cost» for «rather than lower
+    energy cost»: its added «without» is the first thing to read. No flag proves nothing."""
+    plain = (word.text_of if fmt == "docx" else word.strip_placeholders if fmt == "marked"
+             else latex.plain if fmt == "latex" else (lambda t: t))
+    a, b = plain(source), plain(text)
+    out = []
+    for label, found in (("negation added", check.negations(b) - check.negations(a)),
+                         ("negation lost", check.negations(a) - check.negations(b))):
+        if found:
+            out.append(label + " " + ", ".join(f"«{x}»" for x in sorted(set(found))))
+    hedges, boosters = check.claim_changes(a, b)
+    if hedges:
+        out.append("hedge dropped " + ", ".join(f"«{x}»" for x in hedges))
+    if boosters:
+        out.append("claim firmer " + ", ".join(f"«{x}»" for x in boosters))
+    return out + check.comparison_changes(a, b)
+
+
+def ranking(i, written, label=""):
+    """The candidates of paragraph i, fewest flags and then fewest tells first."""
+    if len(written) > 1:
+        print(f"Paragraph {i}{label}, fewest flags and tells first (read them all against the "
+              "original; measure before adopting): " + ", ".join(
+                  f"{os.path.basename(path)} ({flags} flags, tells {score})"
+                  for flags, score, path in sorted(written)), flush=True)
+
+
 def write_candidates(args, i, p, concepts, lang="en"):
     """Up to N acceptable versions of paragraph i, each in its own file. A detector can
     score two samples of the same paragraph 0% and 100%; measuring several and keeping the
@@ -1207,16 +1240,14 @@ def write_candidates(args, i, p, concepts, lang="en"):
                 fh.write(word.text_of(r) + "\n")
         hits = tells.find(blocks.prose_of(r, getattr(args, "fmt", "text")), lang)
         score = sum(w for _, w, _ in hits)
-        written.append((score, path))
+        flags = meaning_flags(p, r, fmt)
+        written.append((len(flags), score, path))
         print(f"Paragraph {i}: {path} (copied {share:.0%}, tells {score}"
-              + (f": {tells.summary(hits)}" if hits else "") + ")", flush=True)
+              + (f": {tells.summary(hits)}" if hits else "")
+              + (f"; flags: {'; '.join(flags)}" if flags else "") + ")", flush=True)
     if found < args.candidates:
         print(f"Paragraph {i}: only {found} acceptable of {tries} tries", flush=True)
-    if len(written) > 1:
-        print(f"Paragraph {i}, fewest tells first (read them all against the original; "
-              "measure before adopting): " + ", ".join(
-                  f"{os.path.basename(path)} ({score})" for score, path in sorted(written)),
-              flush=True)
+    ranking(i, written)
 
 
 def take(original, output, spec):

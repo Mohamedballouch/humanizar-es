@@ -1181,6 +1181,20 @@ class Rewrite(unittest.TestCase):
         self.assertIsNone(rewrite.markup_problem("Write to ana@example.com today.",
                                                  "Send it to ana@example.com now."))
 
+    def test_a_candidate_is_flagged_where_its_meaning_most_often_changed(self):
+        """A real part candidate: «without changing the energy cost» for «rather than lower
+        energy cost», which every check passed."""
+        src = "All three raise daily profit through higher throughput rather than lower energy cost."
+        cand = "The optimisers increase daily profit without changing the energy cost, by higher throughput."
+        self.assertEqual(rewrite.meaning_flags(src, cand), ["negation added «without changing»"])
+        self.assertEqual(rewrite.meaning_flags("A may help.", "A clearly helps."),
+                         ["hedge dropped «may»", "claim firmer «clearly»"])
+        self.assertEqual(rewrite.meaning_flags("A outperforms B.", "A is outperformed by B."),
+                         ["active «outperforms» came back passive («… by»)"])
+        self.assertEqual(rewrite.meaning_flags("The plant [1] may help.", "The plant [1] helps.", "marked"),
+                         ["hedge dropped «may»"])
+        self.assertEqual(rewrite.meaning_flags(src, src), [])
+
     def test_part_candidates_of_two_parts_add_up(self):
         """Candidates are whole paragraphs: taking part 3's after part 1's put part 1 back."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1319,7 +1333,7 @@ class Rewrite(unittest.TestCase):
             self.assertIn("Desde+la", first)  # the lead reached the prompt
             self.assertEqual(read(out), "Primero, ya corregido.\n\nSegundo, ya corregido.\n")
             self.assertIn("tells 0", r.stdout)
-            self.assertIn("fewest tells first", r.stdout)
+            self.assertIn("fewest flags and tells first", r.stdout)
             r = run(sys.executable, script("rewrite.py"), src, "-o", out,
                     "--take", "1=" + os.path.join(folder, files[1]), env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -1353,6 +1367,25 @@ class Rewrite(unittest.TestCase):
                 "rest = ' '.join(source.split()[2:])\n"
                 "sys.stdout.buffer.write((' ' + rest + '\\n</target_text>').encode('utf-8'))\n")
         return fake
+
+    def test_a_candidates_run_leaves_the_parts_record_alone(self):
+        """It used to write back the record it read at its start, undoing a --take or a fix.py
+        made while it ran."""
+        text = "Año tras año, el pingüino camina sin prisa hacia el sur por la costa helada.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = self._fake_llama(tmp)
+            src, out = os.path.join(tmp, "in.txt"), os.path.join(tmp, "out.txt")
+            for path in (src, out):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(text)
+            record = '{"7": {"source": ["a"], "text": ["b"]}}'
+            with open(out + ".parts.json", "w", encoding="utf-8") as fh:
+                fh.write(record)
+            env = dict(os.environ, HUMANIZE_MODEL_DIR=tmp, HUMANIZE_LLAMA=fake)
+            r = run(sys.executable, script("rewrite.py"), src, "-o", out, "--only", "1",
+                    "--candidates", "1", "--tries", "1", "--max-copied", "1", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(read(out + ".parts.json"), record)
 
     def test_runs_end_to_end_with_a_fake_llama(self):
         """The full path of rewrite.py without the model: prompt in a UTF-8 file, output
