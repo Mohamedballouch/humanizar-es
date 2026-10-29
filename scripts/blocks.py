@@ -37,6 +37,12 @@ def format_of(path):
     return "latex" if os.path.splitext(path)[1].lower() in (".tex", ".latex", ".ltx") else "text"
 
 
+def read(path):
+    """The text the scripts work on: the file itself (a BOM dropped)."""
+    with open(path, encoding="utf-8-sig") as fh:
+        return fh.read()
+
+
 def parse(text, fmt="text"):
     """(frame, paragraphs): unparse(frame, paragraphs) writes the file back. For text, the
     frame is the blank line between paragraphs; for LaTeX, everything that is not prose."""

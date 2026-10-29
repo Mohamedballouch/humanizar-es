@@ -1403,6 +1403,75 @@ REVERSING_LLAMA = (
     "sys.stdout.buffer.write((' ' + out + '\\n</target_text>').encode('utf-8'))\n")
 
 
+class Review(unittest.TestCase):
+    """Step 6's sheet: the original's sentences beside the rewrite's, flagged."""
+
+    def test_sentences_ignore_abbreviations(self):
+        import review
+        self.assertEqual(review.sentences("As Smith et al. show in Fig. 3, it works. It ends."),
+                         ["As Smith et al. show in Fig. 3, it works.", "It ends."])
+
+    def test_alignment_handles_merges_splits_drops_and_additions(self):
+        import review
+        a = ["The plant runs on a microgrid every hour.", "Six agents control the battery.",
+             "A supervisor picks a directive at midnight.", "Profit rose by six percent overall."]
+        b = ["Every hour the plant runs on a microgrid, and six agents control the battery.",
+             "At midnight a supervisor picks a directive.", "Weather data came from a station."]
+        pairs = review.align(a, b)
+        self.assertEqual(pairs[0], (a[:2], b[:1]))              # two merged into one
+        self.assertEqual(pairs[1], (a[2:3], b[1:2]))
+        kinds = [(len(o), len(n)) for o, n in pairs[2:]]
+        self.assertIn((1, 0), kinds)                            # profit sentence dropped
+        self.assertIn((0, 1), kinds)                            # weather sentence added
+
+    def test_the_sheet_flags_what_real_runs_got_wrong(self):
+        original = ("Three optimisers use a large language model (LLM) on 30 agent teams. "
+                    "Its first proposals, made after only the incumbent has been scored, may help. "
+                    "Neither superiority nor equivalence is established at B = 3.\n")
+        rewritten = ("Three optimisers use an LLM on 30 teams of three agents. "
+                     "Its first proposals, generated without having seen the incumbent, help. "
+                     "There is no significant difference at B = 3.\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b, c, out = (os.path.join(tmp, n) for n in ("o.txt", "r.txt", "c.txt", "rev.md"))
+            for path, body in ((a, original), (b, rewritten), (c, "incumbent\n")):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+            r = run(sys.executable, script("review.py"), a, b, "--concepts", c, "-o", out)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            sheet = read(out)
+            self.assertIn("CONCEPT missing from the paragraph: large language model (LLM)", sheet)
+            self.assertIn("FIGURES added three", sheet)
+            self.assertIn("NEGATION added «without having»", sheet)
+            self.assertIn("hedge dropped «may»", sheet)
+            self.assertIn("added «significant»", sheet)
+            self.assertIn("3 pairs, 3 flagged", r.stdout)
+
+    def test_a_flagged_pair_names_its_part(self):
+        original = "The plant runs on a microgrid every hour of the day. Profit rose by 5.7% at B = 3.\n"
+        rewritten = "Each hour of the day the plant runs on a microgrid. Profit went up by 6.7% at B = 3.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = os.path.join(tmp, "o.txt"), os.path.join(tmp, "r.txt")
+            for path, body in ((a, original), (b, rewritten)):
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(body)
+            with open(b + ".parts.json", "w", encoding="utf-8") as fh:
+                json.dump({"1": {"source": ["x", "y"], "text": ["Each hour of the day the plant runs on a microgrid.",
+                                                                 "Profit went up by 6.7% at B = 3."]}}, fh)
+            r = run(sys.executable, script("review.py"), a, b)
+            self.assertIn("FIGURES lost 5.7; added 6.7", r.stdout)
+            self.assertIn("--only 1 --part 2", r.stdout)
+            self.assertNotIn("--part 1", r.stdout)                # an unflagged pair names no part
+
+    def test_check_reports_claim_strength(self):
+        self.assertEqual(check.claim_changes("The results may suggest a trend.",
+                                             "The results clearly demonstrate a trend."),
+                         (["may", "suggest"], ["clearly", "demonstrate"]))
+        self.assertEqual(check.claim_changes("It may work.", "It might work, maybe."), ([], []))
+        self.assertEqual(check.claim_changes("Los datos sugieren un efecto.",
+                                             "Los datos demuestran un efecto significativo."),
+                         (["sugieren"], ["demuestran", "significativo"]))
+
+
 class References(unittest.TestCase):
     """A manuscript's references are never rewritten: they go to the frame, byte for byte."""
     ENTRY = "[1] A. Smith, B. Lee. Microgrid control with deep learning. IEEE Trans., 2021."

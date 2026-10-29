@@ -224,10 +224,22 @@ It also lists **formatting tells** (a bold label on every list item, bold sprink
 prose, emojis in headings and lists, arrows, Title Case Headings): those you may fix by
 hand, with the user's agreement, because removing markup adds no words.
 
-Then **compare every paragraph of `01-rewritten.txt` with the original** and list what
-really changed. Start with the negations `check.py` says the version **added**: on a real
-abstract, «made after only the incumbent has been scored» came back as «generated without
-having seen the incumbent score», an inversion every other check passed. Typical slips:
+Then **compare every paragraph of `01-rewritten.txt` with the original**, sentence by
+sentence, with the review sheet:
+
+```bash
+python3 <skill>/scripts/review.py 00-original.txt 01-rewritten.txt --concepts concepts.txt -o 01-review.md
+```
+
+It puts each sentence of the original beside what the rewrite made of it (merges, splits,
+drops and additions included) and flags the pairs where meaning most often changes: a
+figure lost or added, a negation added («made after» -> «generated without having seen»),
+a claim made firmer (a hedge like «may» dropped, «significant» or «demonstrates» added), a
+concept or an acronym's definition missing, a sentence dropped or added, a pair with
+little in common, a pair copied word for word. On four real runs of a journal abstract it
+flagged every error but a garbled sentence and a role swap, so **read every pair**,
+flagged first. A flagged pair of a paragraph rewritten in parts names the `--part` command
+that redoes it. Typical slips:
 
 - a changed detail ("many" → "the majority"; "physical office" → "fixed schedule");
 - an inverted or overstated idea ("were forced to work from home" where it said "split
@@ -407,6 +419,7 @@ risk before proceeding.
   fidelity, `--only`, `--candidates`, `--lead`, `--take`
 - `scripts/join.py` — step 7: rebuild the rhythm of each paragraph (`--only`)
 - `scripts/clean.py` — step 4a: the cleanup work file out, and back in through the gate
+- `scripts/review.py` — step 6: each sentence of the original beside the rewrite's, flagged
 - `scripts/check.py` — concepts, negations and figures (counted), original against version
 - `scripts/latex.py` — LaTeX papers: what is prose, placeholders for math and commands
 - `scripts/convert.py` — PDF to text, text to PDF, LaTeX to PDF

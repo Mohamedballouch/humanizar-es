@@ -54,6 +54,34 @@ if hasattr(sys.stdout, "reconfigure"):  # so a Windows console does not choke on
 NEGATIONS = (r"no|ni|nunca|jamas|tampoco|sin|nadie|nada|ningun|ninguna|ninguno|"
              r"not|never|nor|without|none|nobody|nothing|neither|cannot")
 
+# How strongly a paper states a claim. A rewrite that drops «may» or «suggests», or adds
+# «significant» or «demonstrates», changes what the authors claim even when every figure and
+# term survives: a real run turned «neither superiority nor equivalence is established» into
+# «no significant difference», and a cleanup turned «addressing» into «solved».
+HEDGES = re.compile(r"(?<!\w)(?:may|might|could|possibl[ey]|perhaps|maybe|likely|probabl[ey]|potentially|"
+                    r"suggest(?:s|ed|ing)?|indicat(?:e|es|ed|ing)|appears?|appeared|seems?|seemed|"
+                    r"tends?|tended|partly|partially|approximately|roughly|preliminary|"
+                    r"puede[n]?|podria[n]?|posiblemente|probablemente|quiza[s]?|sugiere[n]?|"
+                    r"indica[n]?|parece[n]?|tiende[n]?|aproximadamente|parcialmente)(?!\w)")
+BOOSTERS = re.compile(r"(?<!\w)(?:clearly|prov(?:e|es|ed|en|ing)|demonstrat(?:e|es|ed|ing)|"
+                      r"confirm(?:s|ed|ing)?|conclusive(?:ly)?|definitely|certainly|undoubtedly|"
+                      r"significant(?:ly)?|strongly|always|"
+                      r"claramente|demuestra[n]?|prueba[n]?|confirma[n]?|significativ[oa]s?|"
+                      r"significativamente|sin duda|siempre)(?!\w)")
+
+
+def claim_changes(original, variant):
+    """(hedges dropped, boosters added), as written, when the variant has fewer hedges or
+    more boosters in all than the original: «may» -> «might» is the same claim, «may» -> «»
+    a firmer one."""
+    count = lambda rx, t: collections.Counter(m.group(0) for m in rx.finditer(norm(t)))  # noqa: E731
+    ho, hv = count(HEDGES, original), count(HEDGES, variant)
+    bo, bv = count(BOOSTERS, original), count(BOOSTERS, variant)
+    hedges = sorted((ho - hv).elements()) if sum(ho.values()) > sum(hv.values()) else []
+    boosters = sorted((bv - bo).elements()) if sum(bv.values()) > sum(bo.values()) else []
+    return hedges, boosters
+
+
 # Capitalized words that are not proper nouns even when they do not open a sentence.
 NOT_PROPER = {
     "el", "la", "los", "las", "un", "una", "unos", "unas", "de", "del", "y", "o", "en",
@@ -320,9 +348,12 @@ def definitions(text):
 
 
 def with_definitions(concepts, text):
-    """The concepts plus every long form the text defines that they do not already hold."""
-    have = {norm(v) for _, variants in concepts for v in variants}
-    extra = [(f"{lf} ({acr})", [lf]) for lf, acr in definitions(text) if norm(lf) not in have]
+    """The concepts plus every long form the text defines. A concept that accepts the
+    acronym instead («large language model | LLM») does not count: a paper still has to
+    spell the long form out where it defines it, and a real run turned «a large language
+    model (LLM, …)» into «an LLM»."""
+    exact = {norm(variants[0]) for _, variants in concepts if len(variants) == 1}
+    extra = [(f"{lf} ({acr})", [lf]) for lf, acr in definitions(text) if norm(lf) not in exact]
     return list(concepts) + extra
 
 
@@ -425,6 +456,28 @@ def main():
         print("\nNEGATIONS the version added (an inversion often starts here; read each one):")
         for f, a in added_neg:
             print(f"  {short_name(f, 30)}: " + ", ".join(f"«{x}»" for x in a))
+    def by_paragraph(a, b):
+        """Claim changes paragraph by paragraph: a hedge added in one does not hide one
+        dropped in another."""
+        pa = [x for x in re.split(r"\n[ \t]*\n", a.strip()) if x.strip()]
+        pb = [x for x in re.split(r"\n[ \t]*\n", b.strip()) if x.strip()]
+        if len(pa) != len(pb):
+            return claim_changes(a, b)
+        hedges, boosters = [], []
+        for x, y in zip(pa, pb):
+            h, bo = claim_changes(x, y)
+            hedges += h
+            boosters += bo
+        return sorted(hedges), sorted(boosters)
+    claims = [(f, *by_paragraph(texts[args.original], texts[f])) for f in args.variants]
+    claims = [(f, h, b) for f, h, b in claims if h or b]
+    if claims:
+        print("\nCLAIM STRENGTH changed (a paper's claim made firmer is a changed claim; read each):")
+        for f, hedges, boosters in claims:
+            print(f"  {short_name(f, 30)}:"
+                  + (f" hedges dropped {', '.join(f'«{x}»' for x in hedges)}" if hedges else "")
+                  + (";" if hedges and boosters else "")
+                  + (f" added {', '.join(f'«{x}»' for x in boosters)}" if boosters else ""))
     if warnings:
         print("\nNEGATIONS from the original that no longer appear the same (review by hand):")
         print("  Many are legitimate rewordings. Look for the ones that change the meaning,")
